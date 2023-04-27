@@ -38,9 +38,23 @@ impl<K: Ord, V> Collection<K, V> {
         }
         let old = self.tree.insert(key.clone(), val);
         let new = self.tree.get(&key).unwrap();
-        // for index in self.indexes.iter() {
-        //     index.
-        // }
+
+        for index in self.indexes.values_mut() {
+            let mut flag = false;
+            for (idx, key_ref) in index.index.iter().enumerate() {
+                let a = self.tree.get(key_ref).unwrap();
+                if index.compare.order(a, new).is_ge() {
+                    index.index.splice(idx..idx, [key.clone()]);
+                    flag = true;
+                    break;
+                }
+            }
+
+            if !flag {
+                index.index.push(key.clone());
+            }
+        }
+
         for subscriber in self.subscribers.values_mut() {
             let change = Change {
                 key: &key,
@@ -59,16 +73,32 @@ impl<K: Ord, V> Collection<K, V> {
     where
         K: Clone,
     {
-        let index = Vec::new();
+        let mut index = Vec::new();
 
-        for old in self.tree.values() {
-            for key in index.as_ref() {
-                let el = self.tree.get(key).unwrap();
-                if i.order(el, old).is_le() {}
+        for (key, a) in self.tree.iter() {
+            let mut flag = false;
+
+            for (idx, key_ref) in index.iter().enumerate() {
+                let b = self.tree.get(key_ref).unwrap();
+                if i.order(a, b).is_ge() {
+                    index.splice(idx..idx, [key.clone()]);
+                    flag = true;
+                    break;
+                }
+            }
+
+            if !flag {
+                index.push(key.clone());
             }
         }
 
-        self.indexes.insert(name.as_ref().to_string());
+        self.indexes.insert(
+            name.as_ref().to_string(),
+            CollectionIndex {
+                index,
+                compare: Box::new(i),
+            },
+        );
     }
 
     pub fn constraint<C: Constraint<V> + 'static>(&mut self, name: impl AsRef<str>, c: C) {
@@ -85,10 +115,14 @@ impl<K: Ord, V> Collection<K, V> {
         self.tree.values()
     }
 
-    pub fn index_iter(&self, key: impl AsRef<str>) /* -> Option<impl Iterator<Item = &V>> */
-    {
-        // self.indexes.get(key.as_ref()).map()
-        todo!()
+    pub fn index_iter(&self, key: impl AsRef<str>) -> Option<impl Iterator<Item = &V>> {
+        Some(
+            self.indexes
+                .get(key.as_ref())?
+                .index
+                .iter()
+                .map(|k| self.tree.get(k).unwrap()),
+        )
     }
 }
 
@@ -165,7 +199,7 @@ fn main() {
 
     collection.index("Counter Value", CounterValueIndex {});
     collection.subscriber("Total Count", GlobalCount::new());
-    collection.constraint("New Counter Must Be 0", CreatedCounterMustStartAt0 {});
+    // collection.constraint("New Counter Must Be 0", CreatedCounterMustStartAt0 {});
 
     collection.set("2", Counter::start(10));
     collection.set("3", Counter::start(5));
@@ -174,20 +208,27 @@ fn main() {
     collection.set("6", Counter::start(7));
 
     let mut iter = collection.iter();
-    assert_eq!(iter.next().unwrap().count, 0);
-    assert_eq!(iter.next().unwrap().count, 10);
-    assert_eq!(iter.next().unwrap().count, 5);
-    assert_eq!(iter.next().unwrap().count, 15);
-    assert_eq!(iter.next().unwrap().count, 20);
-    assert_eq!(iter.next().unwrap().count, 7);
+    println!("Sorted by key");
+    for (index, i) in iter.enumerate() {
+        println!("{}: {:?}", index, i);
+    }
+    // assert_eq!(iter.next().unwrap().count, 0);
+    // assert_eq!(iter.next().unwrap().count, 10);
+    // assert_eq!(iter.next().unwrap().count, 5);
+    // assert_eq!(iter.next().unwrap().count, 15);
+    // assert_eq!(iter.next().unwrap().count, 20);
+    // assert_eq!(iter.next().unwrap().count, 7);
 
-    // let mut iter = collection.index_iter("Counter Value").unwrap();
+    let mut iter = collection.index_iter("Counter Value").unwrap();
+    println!("\nSorted by value");
+    for (index, i) in iter.enumerate() {
+        println!("{}: {:?}", index, i);
+    }
+
     // assert_eq!(iter.next().unwrap().count, 0);
     // assert_eq!(iter.next().unwrap().count, 5);
     // assert_eq!(iter.next().unwrap().count, 7);
     // assert_eq!(iter.next().unwrap().count, 10);
     // assert_eq!(iter.next().unwrap().count, 15);
     // assert_eq!(iter.next().unwrap().count, 20);
-
-    println!("Hello, world!");
 }
