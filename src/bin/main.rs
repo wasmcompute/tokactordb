@@ -3,8 +3,9 @@ use std::{
     time::SystemTime,
 };
 
-use conventually::{Collection, Database};
+use conventually::Database;
 
+#[derive(Debug, serde::Serialize)]
 struct Ticket {
     name: String,
     completed: bool,
@@ -49,8 +50,8 @@ fn main() -> anyhow::Result<()> {
 
     let mut ticket_ids = 0;
 
-    let db = Database::new();
-    let ticket_store = db.create("Ticket", Collection::<u64, Ticket>::new());
+    let mut db = Database::restore("db");
+    let mut ticket_store = db.create::<u64, Ticket>("Ticket");
 
     println!("\nTask Cli Database!\n");
 
@@ -59,22 +60,24 @@ fn main() -> anyhow::Result<()> {
         stdout.flush()?;
         stdin.read_line(&mut buffer)?;
 
-        match buffer.trim() {
+        match buffer.to_lowercase().trim() {
             "create" => {
                 write!(stdout, "Name > ")?;
+                stdout.flush()?;
                 buffer.clear();
                 stdin.read_line(&mut buffer)?;
-                ticket_store.set(ticket_ids, Ticket::new(buffer));
+                ticket_store.set(ticket_ids, Ticket::new(buffer.clone()))?;
                 ticket_ids += 1;
             }
             "list" => {
-                for ticket in ticket_collection.iter() {
-                    writeln!(stdout, "{}", ticket)?;
+                for ticket in ticket_store.as_iter() {
+                    write!(stdout, "{}", ticket)?;
                 }
             }
             "quit" => {
                 writeln!(stdout, "Saving Tasks to Disk...")?;
                 writeln!(stdout, "Quiting...")?;
+                db.close("db")?;
                 break;
             }
             "clear" => {
