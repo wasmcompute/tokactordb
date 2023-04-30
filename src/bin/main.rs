@@ -5,7 +5,7 @@ use std::{
 
 use conventually::Database;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Ticket {
     name: String,
     completed: bool,
@@ -37,7 +37,7 @@ impl std::fmt::Display for Ticket {
         let deleted = if self.completed { "x" } else { " " };
         write!(
             f,
-            "| completed: [{}] | deleted: [{}] | > {}",
+            "| completed: [{}] | deleted: [{}] | {}",
             complete, deleted, self.name
         )
     }
@@ -48,10 +48,8 @@ fn main() -> anyhow::Result<()> {
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
 
-    let mut ticket_ids = 0;
-
-    let mut db = Database::restore("db");
-    let mut ticket_store = db.create::<u64, Ticket>("Ticket");
+    let mut db = Database::restore(".db/wal")?;
+    let mut ticket_store = db.create::<u64, Ticket>("Ticket")?;
 
     println!("\nTask Cli Database!\n");
 
@@ -66,18 +64,17 @@ fn main() -> anyhow::Result<()> {
                 stdout.flush()?;
                 buffer.clear();
                 stdin.read_line(&mut buffer)?;
-                ticket_store.set(ticket_ids, Ticket::new(buffer.clone()))?;
-                ticket_ids += 1;
+                ticket_store.create(Ticket::new(buffer.clone()))?;
             }
             "list" => {
-                for ticket in ticket_store.as_iter() {
-                    write!(stdout, "{}", ticket)?;
+                for (id, ticket) in ticket_store.as_iter() {
+                    write!(stdout, "{} | {}", id, ticket)?;
                 }
             }
             "quit" => {
                 writeln!(stdout, "Saving Tasks to Disk...")?;
                 writeln!(stdout, "Quiting...")?;
-                db.close("db")?;
+                db.close(".db/wal")?;
                 break;
             }
             "clear" => {

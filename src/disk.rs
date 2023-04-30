@@ -4,7 +4,7 @@ const MAX_BUFFER_SIZE: usize = 4096;
 
 #[derive(Debug)]
 pub struct Disk {
-    pointer: usize,
+    write_pointer: usize,
     buffer: [u8; MAX_BUFFER_SIZE],
     contents: Vec<u8>,
 }
@@ -12,7 +12,7 @@ pub struct Disk {
 impl Disk {
     pub fn new() -> Self {
         Self {
-            pointer: 0,
+            write_pointer: 0,
             buffer: [0_u8; MAX_BUFFER_SIZE],
             contents: Vec::new(),
         }
@@ -33,11 +33,15 @@ impl Disk {
         std::fs::write(path, &self.contents)?;
         Ok(())
     }
+
+    pub fn as_reader(&self) -> &[u8] {
+        self.contents.as_ref()
+    }
 }
 
 impl Write for Disk {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let avaliable_bytes = MAX_BUFFER_SIZE - self.pointer;
+        let avaliable_bytes = MAX_BUFFER_SIZE - self.write_pointer;
         if avaliable_bytes == 0 {
             self.flush()?;
         }
@@ -46,14 +50,15 @@ impl Write for Disk {
         } else {
             buf
         };
-        self.buffer[self.pointer..self.pointer + stream.len()].clone_from_slice(stream);
-        self.pointer += stream.len();
+        self.buffer[self.write_pointer..self.write_pointer + stream.len()].clone_from_slice(stream);
+        self.write_pointer += stream.len();
         Ok(stream.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.contents.extend_from_slice(&self.buffer);
-        self.pointer = 0;
+        self.contents
+            .extend_from_slice(&self.buffer[..self.write_pointer]);
+        self.write_pointer = 0;
         Ok(())
     }
 }

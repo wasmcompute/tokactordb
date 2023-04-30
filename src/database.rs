@@ -1,8 +1,8 @@
-use std::{path::Path, sync::Arc, time::SystemTime};
+use std::{sync::Arc, time::SystemTime};
 
 use crc::{Crc, CRC_32_ISCSI};
 
-use crate::{Collection, Database};
+use crate::{AutoIncrement, Collection, Database};
 
 #[derive(Clone)]
 pub struct Tree {
@@ -16,11 +16,12 @@ impl Tree {
 
     pub fn new_collection<K, V>(&self, name: impl ToString) -> Record<K, V>
     where
-        K: serde::Serialize + Ord,
+        K: serde::Serialize + AutoIncrement,
         V: serde::Serialize,
     {
         let collection = Collection::<K, V>::new(name.to_string());
         Record {
+            max: K::default(),
             name: Arc::new(name.to_string()),
             collection,
             database: self.clone(),
@@ -32,7 +33,8 @@ impl Tree {
     }
 }
 
-pub struct Record<K: Ord, V> {
+pub struct Record<K: AutoIncrement, V> {
+    max: K,
     name: Arc<String>,
     collection: Collection<K, V>,
     database: Tree,
@@ -40,40 +42,48 @@ pub struct Record<K: Ord, V> {
 
 impl<K, V> Record<K, V>
 where
-    K: Ord + serde::Serialize + std::fmt::Debug + Clone,
+    K: AutoIncrement + serde::Serialize + std::fmt::Debug + Clone,
     V: serde::Serialize + std::fmt::Debug,
 {
-    pub fn set(&mut self, key: K, value: V) -> anyhow::Result<Option<V>> {
+    pub(crate) fn insert(&mut self, key: K, value: Option<V>) {
+        if key > self.max {
+            self.max = key.clone();
+        }
+
+        if let Some(value) = value {
+            self.collection.set(key, value);
+        } else {
+            self.collection.del(key);
+        }
+    }
+
+    pub fn create(&mut self, value: V) -> anyhow::Result<()>
+    where
+        K: AutoIncrement,
+    {
+        let key = self.max.increment();
         let item = Item::new(&*self.name, &key, Some(&value))?;
         self.database.write(item)?;
         self.collection.set(key, value);
-        Ok(None)
+        Ok(())
     }
 
-    pub fn as_iter(&self) -> impl Iterator<Item = &V> {
+    // pub fn get(&self, key: K) -> &V {}
+
+    // pub fn get_mut(&mut self, key: K) -> &mut V {}
+
+    pub fn as_iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.collection.iter()
     }
 }
 
-// impl<'a> Iterator for StringHolderIter<'a> {
-//     type Item = &'a str;
-//     fn next(&mut self) -> Option<Self::Item> {
-//         if self.i >= self.string_holder.strings.len() {
-//             None
-//         } else {
-//             self.i += 1;
-//             Some(&self.string_holder.strings[self.i - 1])
-//         }
-//     }
-// }
-
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Item {
-    crc: u32,
+    pub crc: u32,
     timestamp: u128,
-    name: String,
-    key: Vec<u8>,
-    value: Option<Vec<u8>>,
+    pub name: String,
+    pub key: Vec<u8>,
+    pub value: Option<Vec<u8>>,
 }
 
 impl Item {
@@ -98,11 +108,11 @@ impl Item {
         Ok(item)
     }
 
-    fn calculate_crc(&self) -> u32 {
+    pub fn calculate_crc(&self) -> u32 {
         let crc = Crc::<u32>::new(&CRC_32_ISCSI);
         let mut digest = crc.digest();
         digest.update(&self.timestamp.to_be_bytes());
-        digest.update(&self.name.as_bytes());
+        digest.update(self.name.as_bytes());
         digest.update(&self.key);
         digest.update(self.value.as_ref().unwrap_or(&vec![]));
         digest.finalize()

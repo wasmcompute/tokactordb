@@ -76,7 +76,9 @@ impl<K: Ord, V> Collection<K, V> {
         // }
     }
 
-    pub fn del(&mut self, key: K) {}
+    pub fn del(&mut self, key: K) {
+        self.tree.remove(&key);
+    }
 
     // pub fn index<I: Index<V> + 'static>(&mut self, name: impl AsRef<str>, i: I)
     // where
@@ -120,8 +122,8 @@ impl<K: Ord, V> Collection<K, V> {
     //         .insert(name.as_ref().to_string(), Box::new(s));
     // }
 
-    pub fn iter(&self) -> impl Iterator<Item = &V> {
-        self.tree.values()
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.tree.iter()
     }
 
     // pub fn index_iter(&self, key: impl AsRef<str>) -> Option<impl Iterator<Item = &V>> {
