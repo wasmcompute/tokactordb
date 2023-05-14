@@ -1,38 +1,52 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 
-use crate::Table;
+use crate::Aggregate;
 
-use super::{Change, Constraint, Index, Subscribe, Update};
-
-pub struct CollectionIndex<K, V> {
-    index: Vec<K>,
-    compare: Box<dyn Index<V>>,
+struct AggregateCollection<K: Ord, V> {
+    tree: BTreeMap<K, Box<dyn Aggregate<K, V>>>,
+    identity: Box<dyn Fn(&V) -> K>,
 }
 
-pub struct Collection<K: Ord, V> {
-    name: String,
+impl<K: Ord, V> AggregateCollection<K, V> {
+    fn new<F>(identity: F) -> Self
+    where
+        F: Fn(&V) -> K + 'static,
+    {
+        Self {
+            tree: BTreeMap::new(),
+            identity: Box::new(identity),
+        }
+    }
+}
+
+pub struct Collection<K: Ord + Default, V> {
     tree: BTreeMap<K, V>,
     // indexes: HashMap<String, CollectionIndex<K, V>>,
     // constraints: HashMap<String, Box<dyn Constraint<V>>>,
-    // subscribers: HashMap<String, Box<dyn Subscribe<K, V>>>,
+    subscribers: HashMap<String, AggregateCollection<K, V>>,
 }
 
-impl<K: Ord, V> Table for Collection<K, V> {}
-
-impl<K: Ord, V> Collection<K, V> {
-    pub fn new(name: impl ToString) -> Self {
+impl<K: Ord + Default, V> Collection<K, V> {
+    pub fn new() -> Self {
         Self {
-            name: name.to_string(),
             tree: BTreeMap::new(),
             // indexes: HashMap::new(),
             // constraints: HashMap::new(),
-            // subscribers: HashMap::new(),
+            subscribers: HashMap::new(),
         }
     }
 
     pub fn iter_values(&self) -> impl Iterator<Item = &V> {
         self.tree.values()
+    }
+
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.tree.get(key)
+    }
+
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.tree.get_mut(key)
     }
 
     pub fn set(&mut self, key: K, val: V)
@@ -117,10 +131,24 @@ impl<K: Ord, V> Collection<K, V> {
     //         .insert(name.as_ref().to_string(), Box::new(c));
     // }
 
-    // pub fn subscriber<S: Subscribe<K, V> + 'static>(&mut self, name: impl AsRef<str>, s: S) {
-    //     self.subscribers
-    //         .insert(name.as_ref().to_string(), Box::new(s));
-    // }
+    pub fn subscriber<A, F>(&mut self, name: impl AsRef<str>, f: F)
+    where
+        A: Aggregate<K, V> + Default + 'static,
+        F: Fn(&V) -> K + 'static,
+    {
+        self.subscribers
+            .insert(name.as_ref().to_string(), AggregateCollection::new(f));
+    }
+
+    pub fn global_subscriber<A, F>(&mut self, name: impl AsRef<str>)
+    where
+        A: Aggregate<K, V> + Default + 'static,
+    {
+        self.subscribers.insert(
+            name.as_ref().to_string(),
+            AggregateCollection::new(|_| K::default()),
+        );
+    }
 
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.tree.iter()

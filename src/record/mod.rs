@@ -4,13 +4,6 @@ mod collection;
 
 pub use collection::Collection;
 
-/// Create an index by implementing a compare function. Declare exactly what the
-/// ordering of the function should be and allow the framework to figure out where
-/// to store the index.
-pub trait Index<V> {
-    fn compare(&self, a: &V, b: &V) -> Ordering;
-}
-
 /// Record the key that was updated along with the state that was changed.
 pub struct Change<K, V> {
     pub key: K,
@@ -36,7 +29,7 @@ pub enum Update<T> {
 ///
 /// Subscribing to a given record is best only if you plan on aggragating records
 /// together.
-pub trait Subscribe<K, V> {
+pub trait Aggregate<K, V> {
     fn observe(&mut self, change: Change<&K, &V>);
 }
 
@@ -46,4 +39,16 @@ pub trait Subscribe<K, V> {
 /// not match what is expected.
 pub trait Constraint<T> {
     fn check(&self, t: &T) -> bool;
+}
+
+/// Create an index by implementing a compare function. Declare exactly what the
+/// ordering of the function should be and allow the framework to figure out where
+/// to store the index.
+pub trait SecondaryIndex<V> {
+    fn compare(&self, a: &V, b: &V) -> Ordering;
+}
+
+/// A sub collection is a list of existing values that are pre-calculated
+pub trait SubCollection<V> {
+    fn include(&self, item: &V) -> bool;
 }
