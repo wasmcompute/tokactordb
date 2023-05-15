@@ -135,14 +135,19 @@ impl Aggregate<u64, Ticket> for TotalArchivedTickets {
 //     }
 // }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    run().await.unwrap();
+}
+
+async fn run() -> anyhow::Result<()> {
     let mut buffer = String::new();
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
 
     let mut db = Database::new();
     // let mut db = Database::restore(".db/wal")?;
-    // let mut ticket_store = db.create::<u64, Ticket>("Ticket")?;
+    let mut ticket_store = db.create::<u64, Ticket>("Ticket").await?;
     // let mut total_ticket_count = db.aggragate::<u32, Ticket, TotalTickets>("Total Tickets")?;
 
     println!("\nTask Cli Database!\n");
@@ -158,7 +163,7 @@ fn main() -> anyhow::Result<()> {
                 stdout.flush()?;
                 buffer.clear();
                 stdin.read_line(&mut buffer)?;
-                // ticket_store.create(Ticket::new(buffer.clone()))?;
+                ticket_store.create(Ticket::new(buffer.clone()))?;
             }
             "complete" => {
                 write!(stdout, "Id > ")?;
@@ -195,10 +200,10 @@ fn main() -> anyhow::Result<()> {
                 //     write!(stdout, "{} | {}", id, ticket)?;
                 // }
             }
-            "quit" => {
+            "quit" | "exit" | "q" | "e" => {
                 writeln!(stdout, "Saving Tasks to Disk...")?;
                 writeln!(stdout, "Quiting...")?;
-                db.close(".db/wal")?;
+                // db.close(".db/wal")?;
                 break;
             }
             "clear" => {
@@ -251,6 +256,5 @@ fn main() -> anyhow::Result<()> {
     // assert_eq!(iter.next().unwrap().count, 10);
     // assert_eq!(iter.next().unwrap().count, 15);
     // assert_eq!(iter.next().unwrap().count, 20);
-
     Ok(())
 }

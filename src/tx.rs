@@ -1,7 +1,13 @@
 pub enum Action {
     Begin,
-    Set { key: Vec<u8>, value: Vec<u8> },
-    Delete { key: Vec<u8> },
+    Set {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        secondary_indexes: Vec<Vec<u8>>,
+    },
+    Delete {
+        key: Vec<u8>,
+    },
     Commit,
     Rollback,
 }
