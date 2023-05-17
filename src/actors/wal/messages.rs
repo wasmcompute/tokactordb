@@ -4,25 +4,23 @@ use tokio::sync::oneshot;
 use super::item::Item;
 
 pub struct Insert {
-    pub tx: oneshot::Sender<()>,
+    pub tx: oneshot::Sender<anyhow::Result<()>>,
     pub item: Item,
 }
 
 impl Insert {
-    pub fn new(tx: oneshot::Sender<()>, item: Item) -> Self {
+    pub fn new(tx: oneshot::Sender<anyhow::Result<()>>, item: Item) -> Self {
         Self { tx, item }
     }
 }
 
 impl Message for Insert {}
 
-pub struct Rx {
-    rx: oneshot::Receiver<()>,
-}
+pub struct Rx {}
 
 impl Rx {
-    pub fn new(rx: oneshot::Receiver<()>) -> Self {
-        Self { rx }
+    pub fn new() -> Self {
+        Self {}
     }
 }
 

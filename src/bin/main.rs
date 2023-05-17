@@ -1,12 +1,14 @@
 use std::{
-    io::{BufRead, Write},
+    fmt::Display,
+    io::{BufRead, StdinLock, StdoutLock, Write},
     time::SystemTime,
 };
 
-use conventually::{Aggregate, Change, Database, Update};
+use conventually::{Aggregate, Change, Database, Tree, Update, ID, U32, U64};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Ticket {
+    board: ID<U32, Board>,
     name: String,
     completed: bool,
     deleted: bool,
@@ -16,12 +18,13 @@ struct Ticket {
 }
 
 impl Ticket {
-    pub fn new(name: impl ToString) -> Self {
+    pub fn new(board: ID<U32, Board>, name: impl ToString) -> Self {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         Self {
+            board,
             name: name.to_string(),
             completed: false,
             deleted: false,
@@ -140,81 +143,175 @@ async fn main() {
     run().await.unwrap();
 }
 
-async fn run() -> anyhow::Result<()> {
-    let mut buffer = String::new();
-    let mut stdin = std::io::stdin().lock();
-    let mut stdout = std::io::stdout().lock();
+struct Cli<'a> {
+    buffer: String,
+    stdin: StdinLock<'a>,
+    stdout: StdoutLock<'a>,
+}
 
-    let mut db = Database::new();
-    // let mut db = Database::restore(".db/wal")?;
-    let mut ticket_store = db.create::<u64, Ticket>("Ticket").await?;
-    // let mut total_ticket_count = db.aggragate::<u32, Ticket, TotalTickets>("Total Tickets")?;
+impl<'a> Cli<'a> {
+    pub fn new() -> Self {
+        Self {
+            buffer: String::new(),
+            stdin: std::io::stdin().lock(),
+            stdout: std::io::stdout().lock(),
+        }
+    }
 
-    println!("\nTask Cli Database!\n");
+    pub fn read_line(&mut self, pre_text: impl AsRef<str>) -> anyhow::Result<String> {
+        self.stdout.write_all(pre_text.as_ref().as_bytes())?;
+        self.stdout.flush()?;
+        self.stdin.read_line(&mut self.buffer)?;
+        let output = self.buffer.trim().to_string();
+        self.buffer.clear();
+        Ok(output)
+    }
 
+    pub fn write(&mut self, text: impl Display) -> anyhow::Result<()> {
+        writeln!(self.stdout, "{}", text)?;
+        Ok(())
+    }
+
+    pub fn error(&mut self, text: impl AsRef<str>) -> anyhow::Result<()> {
+        writeln!(self.stdout, "{}", text.as_ref())?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Board {
+    name: String,
+}
+
+impl Board {
+    pub fn new(name: String) -> Self {
+        Self { name }
+    }
+}
+
+impl std::fmt::Display for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+async fn board<'a>(
+    cli: &mut Cli<'a>,
+    board_store: &Tree<U32, Board>,
+) -> anyhow::Result<ID<U32, Board>> {
+    cli.write("Choose a board!")?;
     loop {
-        stdout.write_all("> ".as_bytes())?;
-        stdout.flush()?;
-        stdin.read_line(&mut buffer)?;
+        let cmd = cli.read_line("> ")?.to_lowercase();
 
-        match buffer.to_lowercase().trim() {
+        match cmd.as_str() {
             "create" => {
-                write!(stdout, "Name > ")?;
-                stdout.flush()?;
-                buffer.clear();
-                stdin.read_line(&mut buffer)?;
-                ticket_store.create(Ticket::new(buffer.clone()))?;
-            }
-            "complete" => {
-                write!(stdout, "Id > ")?;
-                stdout.flush()?;
-                buffer.clear();
-                stdin.read_line(&mut buffer)?;
-
-                // let id = buffer.trim().parse()?;
-                // match ticket_store.get_mut(&id, |ticket| ticket.completed = true) {
-                //     Ok(None) => writeln!(stdout, "Key '{}' does not exist", id)?,
-                //     Err(err) => {
-                //         writeln!(stdout, "Failed to update key '{}' with error: {}", id, err)?
-                //     }
-                //     _ => {}
-                // }
-            }
-            "achive" => {
-                write!(stdout, "Id > ")?;
-                stdout.flush()?;
-                buffer.clear();
-                stdin.read_line(&mut buffer)?;
-
-                // let id = buffer.trim().parse()?;
-                // match ticket_store.get_mut(&id, |ticket| ticket.deleted = true) {
-                //     Ok(None) => writeln!(stdout, "Key '{}' does not exist", id)?,
-                //     Err(err) => {
-                //         writeln!(stdout, "Failed to update key '{}' with error: {}", id, err)?
-                //     }
-                //     _ => {}
-                // }
+                let name = cli.read_line("Name > ")?;
+                board_store.insert(Board::new(name)).await?;
             }
             "list" => {
-                // for (id, ticket) in ticket_store.as_iter() {
-                //     write!(stdout, "{} | {}", id, ticket)?;
-                // }
+                let mut list = board_store.list().await;
+                while let Some((id, board)) = list.next().await {
+                    if let Some(board) = board {
+                        cli.write(format!("{} | {}", id, board))?;
+                    }
+                }
+            }
+            "open" => {
+                let str_id = cli.read_line("Id > ")?;
+                let id = str_id.trim().parse::<u32>()?;
+                if board_store.get(id).await.unwrap().is_some() {
+                    return Ok(ID::new(id.into()));
+                } else {
+                    cli.error(format!("Board ID {} does not exist", str_id.trim()))?;
+                }
+            }
+            command => {
+                cli.write(format!("ERROR: Unknown command -> '{}'", command))?;
+            }
+        }
+    }
+}
+
+async fn tickets<'a>(
+    cli: &mut Cli<'a>,
+    board: ID<U32, Board>,
+    ticket_store: &Tree<U64, Ticket>,
+) -> anyhow::Result<()> {
+    loop {
+        let cmd = cli.read_line("> ")?.to_lowercase();
+
+        match cmd.as_str() {
+            "create" => {
+                let name = cli.read_line("Name > ")?;
+                ticket_store
+                    .insert(Ticket::new(board.clone(), name))
+                    .await?;
+            }
+            "complete" | "archive" => {
+                let str_id = cli.read_line("Id > ")?;
+                let id = str_id.trim().parse::<u64>()?;
+                if let Some(mut ticket) = ticket_store.get(id).await.unwrap() {
+                    if cmd == "complete" {
+                        ticket.completed = true;
+                    } else if cmd == "archive" {
+                        ticket.deleted = true;
+                    }
+                    if let Err(err) = ticket_store.update(id, ticket).await {
+                        cli.error(format!("Failed to update key '{}' with error: {}", id, err))?;
+                    }
+                } else {
+                    cli.error(format!("ID {} does not exist", str_id.trim()))?;
+                }
+            }
+            "get" => {
+                let str_id = cli.read_line("Id > ")?;
+                let id = str_id.trim().parse::<u64>()?;
+                if let Some(ticket) = ticket_store.get(id).await.unwrap() {
+                    cli.write(ticket)?;
+                } else {
+                    cli.error(format!("ID {} does not exist", str_id.trim()))?;
+                }
+            }
+            "list" => {
+                let mut list = ticket_store.list().await;
+                while let Some((id, ticket)) = list.next().await {
+                    if let Some(ticket) = ticket {
+                        cli.write(format!("{} | {}", id, ticket))?;
+                    }
+                }
             }
             "quit" | "exit" | "q" | "e" => {
-                writeln!(stdout, "Saving Tasks to Disk...")?;
-                writeln!(stdout, "Quiting...")?;
-                // db.close(".db/wal")?;
-                break;
+                cli.write("Saving Board to Disk...")?;
+                return Ok(());
             }
             "clear" => {
                 print!("\x1B[2J");
             }
             command => {
-                writeln!(stdout, "ERROR: Unknown command -> '{}'", command)?;
+                cli.write(format!("ERROR: Unknown command -> '{}'", command))?;
             }
         }
+    }
+}
 
-        buffer.clear();
+async fn run() -> anyhow::Result<()> {
+    let mut cli = Cli::new();
+    let db = Database::new();
+    // let mut db = Database::restore(".db/wal")?;
+    let board_store = db.create::<U32, Board>("Boards").await?;
+    let ticket_store = db.create::<U64, Ticket>("Tickets").await?;
+    // let mut total_ticket_count = db.aggragate::<u32, Ticket, TotalTickets>("Total Tickets")?;
+
+    println!("\nTask Cli Database!\n");
+
+    loop {
+        let board = board(&mut cli, &board_store).await?;
+        tickets(&mut cli, board, &ticket_store).await?;
+
+        let buffer = cli.read_line("Would you like to exit?")?;
+        if buffer == "yes" {
+            break;
+        }
     }
 
     println!("Done!");

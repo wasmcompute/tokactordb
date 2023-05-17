@@ -29,14 +29,19 @@ where
 }
 
 impl Wal {
-    pub fn write(&self, key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Rx> {
+    pub async fn write(&self, key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
         let item = Item::new(key, Some(value))?;
         let insert = Insert::new(tx, item);
-        let reciver = Rx::new(rx);
 
-        let _ = self.inner.send(insert);
-
-        reciver
+        if (self.inner.send_async(insert).await).is_err() {
+            anyhow::bail!("Failed to write message to database")
+        }
+        println!("I have written to the log");
+        if (rx.await).is_err() {
+            anyhow::bail!("Database accepted write but the response failed to be recieved. Write may not have succeeded");
+        } else {
+            Ok(())
+        }
     }
 }

@@ -53,13 +53,13 @@ impl Ask<NewTreeRoot> for DbActor {
  * - Wal (Write Ahead Log) Actor
  */
 impl Handler<DeadActorResult<TreeActor>> for DbActor {
-    fn handle(&mut self, message: DeadActorResult<TreeActor>, context: &mut am::Ctx<Self>) {
+    fn handle(&mut self, _: DeadActorResult<TreeActor>, _: &mut am::Ctx<Self>) {
         todo!()
     }
 }
 
 impl Handler<DeadActorResult<WalActor>> for DbActor {
-    fn handle(&mut self, message: DeadActorResult<WalActor>, context: &mut am::Ctx<Self>) {
+    fn handle(&mut self, _: DeadActorResult<WalActor>, _: &mut am::Ctx<Self>) {
         todo!()
     }
 }

@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use am::{Actor, AnonymousRef, Handler};
+use am::{Actor, AnonymousRef, Ctx, Handler};
 use tokio::time::Instant;
 
 use crate::disk::Disk;
@@ -40,7 +40,16 @@ impl Actor for WalActor {
     }
 
     fn scheduler() -> am::Scheduler {
-        am::Scheduler::Blocking
+        am::Scheduler::NonBlocking
+    }
+
+    fn on_stopping(&mut self, ctx: &mut Ctx<Self>) {
+        let me = ctx.address();
+        ctx.anonymous_task(async move {
+            if (me.send_async(Flush {}).await).is_err() {
+                println!("Failed to flush when trying to shut down");
+            }
+        });
     }
 }
 
@@ -52,9 +61,11 @@ impl Handler<Insert> for WalActor {
         if self.flush.is_none() {
             let now = Instant::now();
             let address = ctx.address();
-            let duration = self.flush_buffer_sync.clone();
+            let duration = self.flush_buffer_sync;
             let handle = ctx.anonymous_task(async move {
+                println!("Scheduling flush {:?}", duration);
                 let _ = address.schedule(duration).await.send_async(Flush).await;
+                println!("Lets Flush");
             });
             self.flush = Some(FlushTask { now, handle });
         }
@@ -62,7 +73,7 @@ impl Handler<Insert> for WalActor {
 }
 
 impl Handler<Flush> for WalActor {
-    fn handle(&mut self, message: Flush, context: &mut am::Ctx<Self>) {
+    fn handle(&mut self, _: Flush, context: &mut am::Ctx<Self>) {
         assert!(self.flush.is_some());
         let flush = self.flush.take().unwrap();
         let now = Instant::now();
@@ -82,11 +93,27 @@ impl Handler<Flush> for WalActor {
 
         let vec = vectored.iter().map(|v| IoSlice::new(v)).collect::<Vec<_>>();
 
-        self.disk.write_vectored(&vec);
+        let mut is_error = false;
+
+        if let Err(err) = self.disk.write_vectored(&vec) {
+            is_error = true;
+            println!("{err}");
+            println!("Failed to write buffer to wal disk");
+        }
+        if let Err(err) = self.disk.flush() {
+            is_error = true;
+            println!("{err}");
+            println!("Failed to flush wal disk");
+        }
 
         context.anonymous_task(async move {
             for notifier in notifiers {
-                let _ = notifier.send(());
+                let result = if is_error {
+                    Err(anyhow::Error::msg("Failed to flush buffer to wal disk"))
+                } else {
+                    Ok(())
+                };
+                let _ = notifier.send(result);
             }
         });
     }

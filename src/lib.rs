@@ -1,13 +1,17 @@
 mod actors;
 mod database;
 mod disk;
+mod ids;
 mod record;
+mod relationships;
 mod tx;
 
 use std::fmt::{Debug, Display};
 
 pub use actors::db::Database;
 pub use actors::tree::Tree;
+pub use ids::*;
+pub use relationships::*;
 
 // use database::{Record, Tree};
 pub use record::Collection;
@@ -15,13 +19,6 @@ pub use record::{Aggregate, Change, Update};
 
 pub trait AutoIncrement: Ord + Default + Display + Debug + Clone {
     fn increment(&mut self) -> Self;
-}
-
-impl AutoIncrement for u64 {
-    fn increment(&mut self) -> Self {
-        *self += 1;
-        *self
-    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

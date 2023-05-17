@@ -2,14 +2,11 @@ mod actor;
 mod messages;
 
 use am::{Actor, ActorRef};
-use serde::{de::DeserializeOwned, Serialize};
 
 use actor::DbActor;
 use messages::*;
 
-use crate::AutoIncrement;
-
-use super::tree::Tree;
+use super::tree::{PrimaryKey, RecordValue, Tree};
 
 pub struct Database {
     inner: ActorRef<DbActor>,
@@ -24,8 +21,8 @@ impl Database {
 
     pub async fn create<Key, Value>(&self, name: impl ToString) -> anyhow::Result<Tree<Key, Value>>
     where
-        Key: Serialize + DeserializeOwned + AutoIncrement,
-        Value: Serialize + DeserializeOwned + std::fmt::Debug,
+        Key: PrimaryKey,
+        Value: RecordValue,
     {
         let address = self
             .inner
@@ -35,5 +32,11 @@ impl Database {
             .inner;
 
         Ok(Tree::new(address))
+    }
+}
+
+impl Default for Database {
+    fn default() -> Self {
+        Self::new()
     }
 }
