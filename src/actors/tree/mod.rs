@@ -11,13 +11,13 @@ pub use messages::*;
 
 use self::list::ListStream;
 
-use super::wal::Wal;
+use super::{db::RestoreItem, wal::Wal};
 
-pub fn tree_actor<A>(wal: Wal, ctx: &mut Ctx<A>) -> ActorRef<TreeActor>
+pub fn tree_actor<A>(name: String, wal: Wal, ctx: &mut Ctx<A>) -> ActorRef<TreeActor>
 where
     A: Actor + Handler<DeadActorResult<TreeActor>>,
 {
-    let tree = TreeActor::new(wal);
+    let tree = TreeActor::new(name, wal);
     ctx.spawn(tree)
 }
 
@@ -103,6 +103,12 @@ where
         let tree = Self::new(self.inner.clone());
         ListStream::new(tree).await
     }
+
+    pub(crate) fn as_generic(&self) -> GenericTree {
+        GenericTree {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 fn record_bin_to_value<Key: PrimaryKey, Value: RecordValue>(
@@ -114,5 +120,20 @@ fn record_bin_to_value<Key: PrimaryKey, Value: RecordValue>(
         (key, Some(value))
     } else {
         (key, None)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericTree {
+    inner: ActorRef<TreeActor>,
+}
+
+impl GenericTree {
+    pub fn new(inner: ActorRef<TreeActor>) -> Self {
+        Self { inner }
+    }
+
+    pub async fn send_generic_item(&self, item: RestoreItem) {
+        self.inner.send_async(item).await.unwrap();
     }
 }

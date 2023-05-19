@@ -2,21 +2,27 @@ mod actor;
 mod item;
 mod messages;
 
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
-use am::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
+use am::{Actor, ActorRef, Ctx, DeadActorResult, Handler, Message};
 use tokio::sync::oneshot;
 
-use self::item::Item;
+use self::messages::{DumpWal, WalRestore};
 use crate::disk::Disk;
 
+pub use self::item::Item;
 pub use actor::WalActor;
-pub use messages::{Insert, Rx};
+pub use messages::{Insert, Rx, WalRestoredItems};
 
 #[derive(Clone)]
 pub struct Wal {
     inner: ActorRef<WalActor>,
 }
+
+impl Message for Wal {}
 
 pub fn new_wal_actor<A>(ctx: &mut Ctx<A>, flush_buffer_sync: Duration) -> Wal
 where
@@ -29,9 +35,9 @@ where
 }
 
 impl Wal {
-    pub async fn write(&self, key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<()> {
+    pub async fn write(&self, table: String, key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
-        let item = Item::new(key, Some(value))?;
+        let item = Item::new(table, key, Some(value))?;
         let insert = Insert::new(tx, item);
 
         if (self.inner.send_async(insert).await).is_err() {
@@ -43,5 +49,17 @@ impl Wal {
         } else {
             Ok(())
         }
+    }
+
+    pub async fn restore(&self, wals: PathBuf) -> WalRestoredItems {
+        self.inner.ask(WalRestore { path: wals }).await.unwrap()
+    }
+
+    pub async fn dump(&self, wal: impl AsRef<Path>) -> anyhow::Result<()> {
+        self.inner
+            .ask(DumpWal(wal.as_ref().to_path_buf()))
+            .await
+            .unwrap();
+        Ok(())
     }
 }

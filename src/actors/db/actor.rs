@@ -1,17 +1,17 @@
 use std::{collections::HashMap, time::Duration};
 
-use am::{Actor, ActorRef, Ask, DeadActorResult, Handler};
+use am::{Actor, Ask, AsyncAsk, AsyncHandle, DeadActorResult, Handler};
 
 use crate::actors::{
-    tree::{tree_actor, TreeActor},
-    wal::{new_wal_actor, Wal, WalActor},
+    tree::{tree_actor, GenericTree, TreeActor},
+    wal::{new_wal_actor, Wal, WalActor, WalRestoredItems},
 };
 
-use super::messages::{NewTreeRoot, TreeRoot};
+use super::messages::{NewTreeRoot, Restore, RestoreItem, TreeRoot};
 
 pub struct DbActor {
     wal: Option<Wal>,
-    trees: HashMap<String, ActorRef<TreeActor>>,
+    trees: HashMap<String, GenericTree>,
 }
 
 impl DbActor {
@@ -41,9 +41,56 @@ impl Ask<NewTreeRoot> for DbActor {
     type Result = TreeRoot;
 
     fn handle(&mut self, message: NewTreeRoot, context: &mut am::Ctx<Self>) -> Self::Result {
-        let address = tree_actor(self.wal(), context);
-        self.trees.insert(message.name, address.clone());
+        let address = tree_actor(message.name.clone(), self.wal(), context);
+        self.trees
+            .insert(message.name, GenericTree::new(address.clone()));
         TreeRoot::new(address)
+    }
+}
+
+impl AsyncAsk<Restore> for DbActor {
+    type Result = WalRestoredItems;
+
+    fn handle(&mut self, msg: Restore, ctx: &mut am::Ctx<Self>) -> AsyncHandle<Self::Result> {
+        // The restore message given to us here is a directory. In the future we'd
+        // want to do some advanced logic here such as like  get metadata files
+        // and read all of the WAL logs that are avaliable to us.
+
+        // For now we'll just hard code the one file ;)
+        assert!(msg.directory.is_dir());
+        let wal_address = self.wal();
+        let wal_path = msg.directory.join("wal");
+
+        ctx.anonymous_handle(async move {
+            if !wal_path.exists() {
+                WalRestoredItems::new(vec![])
+            } else {
+                wal_address.restore(wal_path).await
+            }
+        })
+    }
+}
+
+impl AsyncAsk<RestoreItem> for DbActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: RestoreItem, ctx: &mut am::Ctx<Self>) -> AsyncHandle<Self::Result> {
+        if let Some(tree) = self.trees.get(&msg.table) {
+            let tree_addr = tree.clone();
+            ctx.anonymous_handle(async move {
+                tree_addr.send_generic_item(msg).await;
+            })
+        } else {
+            ctx.anonymous_handle(async move {})
+        }
+    }
+}
+
+impl Ask<()> for DbActor {
+    type Result = Wal;
+
+    fn handle(&mut self, _: (), _: &mut am::Ctx<Self>) -> Self::Result {
+        self.wal()
     }
 }
 

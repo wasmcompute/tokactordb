@@ -198,7 +198,7 @@ impl std::fmt::Display for Board {
 async fn board<'a>(
     cli: &mut Cli<'a>,
     board_store: &Tree<U32, Board>,
-) -> anyhow::Result<ID<U32, Board>> {
+) -> anyhow::Result<Option<ID<U32, Board>>> {
     cli.write("Choose a board!")?;
     loop {
         let cmd = cli.read_line("> ")?.to_lowercase();
@@ -220,11 +220,12 @@ async fn board<'a>(
                 let str_id = cli.read_line("Id > ")?;
                 let id = str_id.trim().parse::<u32>()?;
                 if board_store.get(id).await.unwrap().is_some() {
-                    return Ok(ID::new(id.into()));
+                    return Ok(Some(ID::new(id.into())));
                 } else {
                     cli.error(format!("Board ID {} does not exist", str_id.trim()))?;
                 }
             }
+            "exit" | "quit" | "e" | "q" => return Ok(None),
             command => {
                 cli.write(format!("ERROR: Unknown command -> '{}'", command))?;
             }
@@ -296,23 +297,29 @@ async fn tickets<'a>(
 
 async fn run() -> anyhow::Result<()> {
     let mut cli = Cli::new();
-    let db = Database::new();
+    let mut db = Database::new();
     // let mut db = Database::restore(".db/wal")?;
     let board_store = db.create::<U32, Board>("Boards").await?;
     let ticket_store = db.create::<U64, Ticket>("Tickets").await?;
     // let mut total_ticket_count = db.aggragate::<u32, Ticket, TotalTickets>("Total Tickets")?;
+    db.restore(".db").await?;
 
     println!("\nTask Cli Database!\n");
 
     loop {
-        let board = board(&mut cli, &board_store).await?;
-        tickets(&mut cli, board, &ticket_store).await?;
+        if let Some(board) = board(&mut cli, &board_store).await? {
+            tickets(&mut cli, board, &ticket_store).await?;
+        } else {
+            break;
+        }
 
         let buffer = cli.read_line("Would you like to exit?")?;
         if buffer == "yes" {
             break;
         }
     }
+
+    db.dump(".db").await?;
 
     println!("Done!");
 

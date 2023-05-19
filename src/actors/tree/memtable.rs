@@ -40,6 +40,7 @@ impl MemTable {
             .map(|(k, v)| (k.clone(), v.clone()))
     }
 
+    /// Largest value in the tree
     pub fn get_last(&self) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
         self.map
             .last_key_value()
@@ -54,5 +55,9 @@ impl MemTable {
                 value: v.clone(),
             })
             .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }

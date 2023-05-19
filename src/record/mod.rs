@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 mod collection;
 
-pub use collection::Collection;
+// pub use collection::Collection;
 
 /// Record the key that was updated along with the state that was changed.
 pub struct Change<K, V> {

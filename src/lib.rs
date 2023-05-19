@@ -14,7 +14,7 @@ pub use ids::*;
 pub use relationships::*;
 
 // use database::{Record, Tree};
-pub use record::Collection;
+// pub use record::Collection;
 pub use record::{Aggregate, Change, Update};
 
 pub trait AutoIncrement: Ord + Default + Display + Debug + Clone {

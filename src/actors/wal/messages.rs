@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use am::Message;
 use tokio::sync::oneshot;
 
@@ -18,14 +20,29 @@ impl Message for Insert {}
 
 pub struct Rx {}
 
-impl Rx {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
 impl Message for Rx {}
 
 #[derive(Debug)]
 pub struct Flush;
 impl Message for Flush {}
+
+#[derive(Debug)]
+pub struct WalRestore {
+    pub path: PathBuf,
+}
+impl Message for WalRestore {}
+
+pub struct WalRestoredItems {
+    pub items: Vec<Item>,
+}
+
+impl WalRestoredItems {
+    pub fn new(items: Vec<Item>) -> Self {
+        Self { items }
+    }
+}
+impl Message for WalRestoredItems {}
+
+#[derive(Debug)]
+pub struct DumpWal(pub PathBuf);
+impl Message for DumpWal {}

@@ -1,18 +1,23 @@
 use std::{
-    io::{IoSlice, Write},
+    io::{BufReader, IoSlice, Write},
     time::Duration,
 };
 
-use am::{Actor, AnonymousRef, Ctx, Handler};
-use tokio::time::Instant;
+use am::{Actor, AnonymousRef, Ask, Ctx, Handler};
+use anyhow::Error;
+use bincode::Options;
+use tokio::{sync::oneshot, time::Instant};
 
-use crate::disk::Disk;
+use crate::{
+    actors::wal::{item::Item, messages::WalRestoredItems},
+    disk::Disk,
+};
 
-use super::messages::{Flush, Insert};
+use super::messages::{DumpWal, Flush, Insert, WalRestore};
 
 struct FlushTask {
     now: Instant,
-    handle: AnonymousRef,
+    _handle: AnonymousRef,
 }
 
 pub struct WalActor {
@@ -22,6 +27,8 @@ pub struct WalActor {
     flush_buffer_sync: Duration,
 }
 
+impl WalActor {}
+
 impl WalActor {
     pub fn new(disk: Disk, flush_buffer_sync: Duration) -> Self {
         Self {
@@ -30,6 +37,39 @@ impl WalActor {
             disk,
             flush_buffer_sync,
         }
+    }
+
+    fn flush(&mut self, task: FlushTask) -> (bool, Vec<oneshot::Sender<Result<(), Error>>>) {
+        let now = Instant::now();
+        println!(
+            "Writing {} records after {} milliseconds",
+            self.buffer.len(),
+            (now - task.now).as_millis()
+        );
+
+        // serialize all objects
+        let mut vectored = vec![];
+        let mut notifiers = vec![];
+        for write in self.buffer.drain(..) {
+            vectored.push(bincode::serialize(&write.item).unwrap());
+            notifiers.push(write.tx);
+        }
+
+        let vec = vectored.iter().map(|v| IoSlice::new(v)).collect::<Vec<_>>();
+
+        let mut is_error = false;
+
+        if let Err(err) = self.disk.write_vectored(&vec) {
+            is_error = true;
+            println!("{err}");
+            println!("Failed to write buffer to wal disk");
+        }
+        if let Err(err) = self.disk.flush() {
+            is_error = true;
+            println!("{err}");
+            println!("Failed to flush wal disk");
+        }
+        (is_error, notifiers)
     }
 }
 
@@ -62,12 +102,12 @@ impl Handler<Insert> for WalActor {
             let now = Instant::now();
             let address = ctx.address();
             let duration = self.flush_buffer_sync;
-            let handle = ctx.anonymous_task(async move {
+            let _handle = ctx.anonymous_task(async move {
                 println!("Scheduling flush {:?}", duration);
                 let _ = address.schedule(duration).await.send_async(Flush).await;
                 println!("Lets Flush");
             });
-            self.flush = Some(FlushTask { now, handle });
+            self.flush = Some(FlushTask { now, _handle });
         }
     }
 }
@@ -76,36 +116,7 @@ impl Handler<Flush> for WalActor {
     fn handle(&mut self, _: Flush, context: &mut am::Ctx<Self>) {
         assert!(self.flush.is_some());
         let flush = self.flush.take().unwrap();
-        let now = Instant::now();
-        println!(
-            "Writing {} records after {} milliseconds",
-            self.buffer.len(),
-            (now - flush.now).as_millis()
-        );
-
-        // serialize all objects
-        let mut vectored = vec![];
-        let mut notifiers = vec![];
-        for write in self.buffer.drain(..) {
-            vectored.push(bincode::serialize(&write.item).unwrap());
-            notifiers.push(write.tx);
-        }
-
-        let vec = vectored.iter().map(|v| IoSlice::new(v)).collect::<Vec<_>>();
-
-        let mut is_error = false;
-
-        if let Err(err) = self.disk.write_vectored(&vec) {
-            is_error = true;
-            println!("{err}");
-            println!("Failed to write buffer to wal disk");
-        }
-        if let Err(err) = self.disk.flush() {
-            is_error = true;
-            println!("{err}");
-            println!("Failed to flush wal disk");
-        }
-
+        let (is_error, notifiers) = self.flush(flush);
         context.anonymous_task(async move {
             for notifier in notifiers {
                 let result = if is_error {
@@ -116,5 +127,58 @@ impl Handler<Flush> for WalActor {
                 let _ = notifier.send(result);
             }
         });
+    }
+}
+
+impl Ask<WalRestore> for WalActor {
+    type Result = WalRestoredItems;
+
+    fn handle(&mut self, msg: WalRestore, _: &mut Ctx<Self>) -> Self::Result {
+        assert!(self.disk.is_empty());
+        assert!(self.buffer.is_empty());
+        assert!(self.flush.is_none());
+
+        let path = msg.path;
+        assert!(path.is_file());
+
+        // TODO(Alec): ooohhh aren't you naugthy, doing a blocking operation on
+        //             an async thread. LOL who cares for now :P
+        self.disk = Disk::restore(path).unwrap();
+        if self.disk.is_empty() {
+            return WalRestoredItems::new(vec![]);
+        }
+        let reader = BufReader::new(self.disk.as_reader());
+
+        // let config = bincode::DefaultOptions::new()
+        //     .with_limit(4096)
+        //     .with_no_limit()
+        //     .allow_trailing_bytes();
+
+        let items: Item = bincode::deserialize_from(reader).unwrap();
+        let (valids, invalids): (Vec<Item>, Vec<Item>) =
+            vec![items].into_iter().partition(|i| i.is_valid());
+
+        if !invalids.is_empty() {
+            println!("Found invalid records in the WAL");
+            for invalid in invalids {
+                println!("INVALID: {:?}", invalid);
+            }
+        }
+
+        WalRestoredItems::new(valids)
+    }
+}
+
+impl Ask<DumpWal> for WalActor {
+    type Result = ();
+    fn handle(&mut self, msg: DumpWal, _: &mut Ctx<Self>) -> Self::Result {
+        // TODO(Alec): Figure out a better way to make the path a more standard
+        //             location. Currently, the DbActor for the `Restore` message
+        //             add's `wal` to the path (which we are doing here.) Whats a
+        //             better standard way of doing this?
+
+        // Ugh everything here sucks, What we should do is just `.await` the actor
+        // and as the last message it puts on itself is a dump message. ewh
+        self.disk.dump(msg.0.join("wal")).unwrap();
     }
 }
