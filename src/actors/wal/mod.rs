@@ -37,13 +37,12 @@ where
 impl Wal {
     pub async fn write(&self, table: String, key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
-        let item = Item::new(table, key, Some(value))?;
+        let item = Item::new(table, key, Some(value));
         let insert = Insert::new(tx, item);
 
         if (self.inner.send_async(insert).await).is_err() {
             anyhow::bail!("Failed to write message to database")
         }
-        println!("I have written to the log");
         if (rx.await).is_err() {
             anyhow::bail!("Database accepted write but the response failed to be recieved. Write may not have succeeded");
         } else {

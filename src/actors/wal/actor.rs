@@ -1,11 +1,10 @@
 use std::{
-    io::{BufReader, IoSlice, Write},
+    io::{BufRead, BufReader, IoSlice, Write},
     time::Duration,
 };
 
 use am::{Actor, AnonymousRef, Ask, Ctx, Handler};
 use anyhow::Error;
-use bincode::Options;
 use tokio::{sync::oneshot, time::Instant};
 
 use crate::{
@@ -51,6 +50,7 @@ impl WalActor {
         let mut vectored = vec![];
         let mut notifiers = vec![];
         for write in self.buffer.drain(..) {
+            println!("{}", write.item);
             vectored.push(bincode::serialize(&write.item).unwrap());
             notifiers.push(write.tx);
         }
@@ -103,9 +103,7 @@ impl Handler<Insert> for WalActor {
             let address = ctx.address();
             let duration = self.flush_buffer_sync;
             let _handle = ctx.anonymous_task(async move {
-                println!("Scheduling flush {:?}", duration);
                 let _ = address.schedule(duration).await.send_async(Flush).await;
-                println!("Lets Flush");
             });
             self.flush = Some(FlushTask { now, _handle });
         }
@@ -147,16 +145,19 @@ impl Ask<WalRestore> for WalActor {
         if self.disk.is_empty() {
             return WalRestoredItems::new(vec![]);
         }
-        let reader = BufReader::new(self.disk.as_reader());
+        let mut reader = BufReader::new(self.disk.as_reader());
+        reader.fill_buf().unwrap();
 
-        // let config = bincode::DefaultOptions::new()
-        //     .with_limit(4096)
-        //     .with_no_limit()
-        //     .allow_trailing_bytes();
-
-        let items: Item = bincode::deserialize_from(reader).unwrap();
+        let mut items: Vec<Item> = Vec::new();
+        while !reader.buffer().is_empty() {
+            if let Ok(item) = bincode::deserialize_from(&mut reader) {
+                items.push(item);
+            } else {
+                panic!("Failed to read a record from the WAL log")
+            }
+        }
         let (valids, invalids): (Vec<Item>, Vec<Item>) =
-            vec![items].into_iter().partition(|i| i.is_valid());
+            items.into_iter().partition(|i| i.is_valid());
 
         if !invalids.is_empty() {
             println!("Found invalid records in the WAL");

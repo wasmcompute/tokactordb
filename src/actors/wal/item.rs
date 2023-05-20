@@ -12,12 +12,7 @@ pub struct Item {
 }
 
 impl Item {
-    pub fn new(table: String, key: Vec<u8>, value: Option<Vec<u8>>) -> anyhow::Result<Self> {
-        let value = if let Some(value) = value.map(|v| serde_json::to_vec(&v)) {
-            Some(value?)
-        } else {
-            None
-        };
+    pub fn new(table: String, key: Vec<u8>, value: Option<Vec<u8>>) -> Self {
         let mut item = Self {
             crc: 0,
             timestamp: now(),
@@ -26,7 +21,7 @@ impl Item {
             value,
         };
         item.crc = item.calculate_crc();
-        Ok(item)
+        item
     }
 
     pub fn calculate_crc(&self) -> u32 {
@@ -41,6 +36,22 @@ impl Item {
 
     pub fn is_valid(&self) -> bool {
         self.calculate_crc() == self.crc
+    }
+}
+
+impl std::fmt::Display for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = if let Some(value) = self.value.as_ref() {
+            let json: serde_json::Value = serde_json::from_slice(value).unwrap();
+            json.to_string()
+        } else {
+            "None".to_string()
+        };
+        write!(
+            f,
+            "CRC: {}, table: {}, value: {}",
+            self.crc, self.table, value
+        )
     }
 }
 
