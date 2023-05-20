@@ -3,15 +3,17 @@ mod list;
 mod memtable;
 mod messages;
 
-use std::marker::PhantomData;
-
 pub use actor::*;
 use am::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
 pub use messages::*;
 
 use self::list::ListStream;
 
-use super::{db::RestoreItem, wal::Wal};
+use super::{
+    subtree::{IndexTreeActor, IndexTreeAddresses, SubTree, SubTreeSubscriber},
+    wal::Wal,
+    GenericTree,
+};
 
 pub fn tree_actor<A>(name: String, wal: Wal, ctx: &mut Ctx<A>) -> ActorRef<TreeActor>
 where
@@ -27,8 +29,7 @@ where
     Value: RecordValue,
 {
     inner: ActorRef<TreeActor>,
-    _key: PhantomData<Key>,
-    _value: PhantomData<Value>,
+    subscribers: Vec<SubTreeSubscriber<Key, Value>>,
 }
 
 impl<Key, Value> Tree<Key, Value>
@@ -39,8 +40,7 @@ where
     pub fn new(inner: ActorRef<TreeActor>) -> Self {
         Self {
             inner,
-            _key: PhantomData,
-            _value: PhantomData,
+            subscribers: vec![],
         }
     }
 
@@ -48,16 +48,14 @@ where
     where
         Key: PrimaryKey,
     {
-        println!("inserting {:?}", value);
-        let value = serde_json::to_vec(&value)?;
-        let record = InsertRecord::new(value);
+        let json = serde_json::to_vec(&value)?;
+        let record = InsertRecord::new(json);
         let response = self.inner.async_ask(record).await.unwrap();
         Ok(response.key)
     }
 
     pub async fn update(&self, id: impl Into<Key>, value: Value) -> anyhow::Result<()> {
         let id = bincode::serialize(&id.into())?;
-        println!("{}", serde_json::to_string_pretty(&value)?);
         let value = serde_json::to_vec(&value)?;
         let record = UpdateRecord::new(id, value);
         self.inner.async_ask(record).await.unwrap();
@@ -104,10 +102,24 @@ where
         ListStream::new(tree).await
     }
 
+    pub fn register_subscriber<ID, F>(
+        &mut self,
+        tree: Tree<ID, Vec<Key>>,
+        identity: F,
+    ) -> SubTree<ID, Value>
+    where
+        ID: PrimaryKey,
+        F: Fn(&Value) -> Option<&ID> + 'static,
+    {
+        let source_tree = Self::new(self.inner.clone());
+        let tree = IndexTreeActor::new(tree, source_tree, identity);
+        let IndexTreeAddresses { subscriber, tree } = tree.spawn();
+        self.subscribers.push(subscriber);
+        tree
+    }
+
     pub(crate) fn as_generic(&self) -> GenericTree {
-        GenericTree {
-            inner: self.inner.clone(),
-        }
+        GenericTree::new(self.inner.clone())
     }
 }
 
@@ -116,24 +128,9 @@ fn record_bin_to_value<Key: PrimaryKey, Value: RecordValue>(
 ) -> (Key, Option<Value>) {
     let key = bincode::deserialize(&record.key).unwrap();
     if let Some(value) = &record.value {
-        let value = serde_json::from_slice(value).unwrap();
-        (key, Some(value))
+        let json_value = serde_json::from_slice(value).unwrap();
+        (key, Some(json_value))
     } else {
         (key, None)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct GenericTree {
-    inner: ActorRef<TreeActor>,
-}
-
-impl GenericTree {
-    pub fn new(inner: ActorRef<TreeActor>) -> Self {
-        Self { inner }
-    }
-
-    pub async fn send_generic_item(&self, item: RestoreItem) {
-        self.inner.send_async(item).await.unwrap();
     }
 }

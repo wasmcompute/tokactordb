@@ -5,14 +5,22 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::AutoIncrement;
 
+use super::GenericTree;
+
 pub trait PrimaryKey:
     Serialize + DeserializeOwned + AutoIncrement + std::fmt::Debug + Default + Send + Sync + 'static
 {
 }
 
-pub trait RecordValue: Serialize + DeserializeOwned + std::fmt::Debug {}
+pub trait RecordValue:
+    Serialize + DeserializeOwned + Send + Sync + std::fmt::Debug + 'static
+{
+}
 
-impl<T> RecordValue for T where T: Serialize + DeserializeOwned + std::fmt::Debug {}
+impl<T> RecordValue for T where
+    T: Serialize + DeserializeOwned + Send + Sync + std::fmt::Debug + 'static
+{
+}
 
 #[derive(Debug)]
 pub struct InsertRecord<Key: PrimaryKey> {
@@ -107,3 +115,9 @@ pub struct Snapshot {
     pub list: Vec<Record>,
 }
 impl Message for Snapshot {}
+
+#[derive(Debug)]
+pub struct AddGenericTree {
+    pub inner: GenericTree,
+}
+impl Message for AddGenericTree {}

@@ -3,8 +3,9 @@ use am::{Actor, Ask, AsyncAsk, AsyncHandle, Handler};
 use crate::actors::{db::RestoreItem, wal::Wal};
 
 use super::{
-    memtable::MemTable, GetMemTableSnapshot, GetRecord, GetRecordResult, InsertRecord,
-    InsertSuccess, ListEnd, ListEndResult, PrimaryKey, Record, Snapshot, UpdateRecord,
+    memtable::MemTable, AddGenericTree, GenericTree, GetMemTableSnapshot, GetRecord,
+    GetRecordResult, InsertRecord, InsertSuccess, ListEnd, ListEndResult, PrimaryKey, Record,
+    Snapshot, UpdateRecord,
 };
 
 pub struct TreeActor {
@@ -12,6 +13,7 @@ pub struct TreeActor {
     memtable: MemTable,
     max: Option<Vec<u8>>,
     wal: Wal,
+    subscribers: Vec<GenericTree>,
 }
 
 impl TreeActor {
@@ -21,6 +23,7 @@ impl TreeActor {
             memtable: MemTable::new(),
             max: None,
             wal,
+            subscribers: Vec::new(),
         }
     }
 }
@@ -119,6 +122,14 @@ impl Ask<GetMemTableSnapshot> for TreeActor {
         Snapshot {
             list: self.memtable.as_sorted_vec(),
         }
+    }
+}
+
+impl Ask<AddGenericTree> for TreeActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: AddGenericTree, _: &mut am::Ctx<Self>) -> Self::Result {
+        self.subscribers.push(msg.inner)
     }
 }
 

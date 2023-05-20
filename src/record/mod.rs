@@ -47,8 +47,3 @@ pub trait Constraint<T> {
 pub trait SecondaryIndex<V> {
     fn compare(&self, a: &V, b: &V) -> Ordering;
 }
-
-/// A sub collection is a list of existing values that are pre-calculated
-pub trait SubCollection<V> {
-    fn include(&self, item: &V) -> bool;
-}

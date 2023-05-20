@@ -40,8 +40,8 @@ impl std::fmt::Display for Ticket {
         let deleted = if self.deleted { "x" } else { " " };
         write!(
             f,
-            "| completed: [{}] | achived: [{}] | {}",
-            complete, deleted, self.name
+            "| {} | completed: [{}] | achived: [{}] | {}",
+            self.board, complete, deleted, self.name
         )
     }
 }
@@ -131,13 +131,6 @@ impl Aggregate<u64, Ticket> for TotalArchivedTickets {
     }
 }
 
-// struct CompletedTickets;
-// impl SubCollection<Ticket> for CompletedTickets {
-//     fn include(&self, item: &Ticket) -> bool {
-//         item.completed
-//     }
-// }
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     run().await.unwrap();
@@ -212,7 +205,7 @@ async fn board<'a>(
                 let mut list = board_store.list().await;
                 while let Some((id, board)) = list.next().await {
                     if let Some(board) = board {
-                        cli.write(format!("{} | {}", id, board))?;
+                        cli.write(format!("{} -> {}", id, board))?;
                     }
                 }
             }
@@ -277,7 +270,7 @@ async fn tickets<'a>(
                 let mut list = ticket_store.list().await;
                 while let Some((id, ticket)) = list.next().await {
                     if let Some(ticket) = ticket {
-                        cli.write(format!("{} | {}", id, ticket))?;
+                        cli.write(format!("{} -> {}", id, ticket))?;
                     }
                 }
             }
@@ -300,7 +293,13 @@ async fn run() -> anyhow::Result<()> {
     let mut db = Database::new();
     // let mut db = Database::restore(".db/wal")?;
     let board_store = db.create::<U32, Board>("Boards").await?;
-    let ticket_store = db.create::<U64, Ticket>("Tickets").await?;
+    let mut ticket_store = db.create::<U64, Ticket>("Tickets").await?;
+    let board_tickets = db
+        .create_index("Board Ticket Index", &mut ticket_store, |value| {
+            Some(&value.board)
+        })
+        .await?;
+
     // let mut total_ticket_count = db.aggragate::<u32, Ticket, TotalTickets>("Total Tickets")?;
     db.restore(".db").await?;
 

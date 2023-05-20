@@ -3,8 +3,9 @@ use std::{collections::HashMap, time::Duration};
 use am::{Actor, Ask, AsyncAsk, AsyncHandle, DeadActorResult, Handler};
 
 use crate::actors::{
-    tree::{tree_actor, GenericTree, TreeActor},
+    tree::{tree_actor, TreeActor},
     wal::{new_wal_actor, Wal, WalActor, WalRestoredItems},
+    GenericTree,
 };
 
 use super::messages::{NewTreeRoot, Restore, RestoreItem, TreeRoot};
