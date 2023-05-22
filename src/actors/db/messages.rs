@@ -58,3 +58,7 @@ impl DerefMut for RestoreItem {
         &mut self.0
     }
 }
+
+#[derive(Debug)]
+pub struct RestoreComplete;
+impl Message for RestoreComplete {}

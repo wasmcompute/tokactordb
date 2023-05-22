@@ -7,11 +7,13 @@ use crate::{
     Change, Tree, Update,
 };
 
-use super::{SubTree, SubTreeSubscriber};
+use super::{SubTree, SubTreeRestorer, SubTreeSubscriber};
 
 type IdentityFn<ID, Value> = dyn Fn(&Value) -> Option<&ID> + Send + Sync + 'static;
 
 pub struct IndexTreeAddresses<ID: PrimaryKey, Key: PrimaryKey, Value: RecordValue> {
+    pub ready_rx: oneshot::Receiver<()>,
+    pub restorer: SubTreeRestorer,
     pub subscriber: SubTreeSubscriber<Key, Value>,
     pub tree: SubTree<ID, Value>,
 }
@@ -114,18 +116,47 @@ where
     }
 
     pub fn spawn(self) -> IndexTreeAddresses<ID, Key, Value> {
-        let (subscribe_tx, mut subscribe_rx) = mpsc::channel::<Change<Arc<Key>, Arc<Value>>>(10);
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let (restore_tx, mut restore_rx) =
+            mpsc::channel::<(Arc<Vec<u8>>, Arc<Option<Vec<u8>>>)>(10);
+        let (subscribe_tx, mut subscribe_rx) =
+            mpsc::channel::<(Change<Arc<Key>, Arc<Value>>, oneshot::Sender<()>)>(10);
         let (actor_tx, mut actor_rx) = mpsc::channel::<(ID, oneshot::Sender<Vec<Value>>)>(10);
 
         let _subscribe_tx = subscribe_tx.clone();
         let fut = async move {
+            // Keep the subscriber for the changes open. This way even if the
+            // references to the sender are destroyed, subscribe_rx will never
+            // return `None`.
             let _ = _subscribe_tx;
             let mut actor = self;
+
+            // First, continue looping until all of the items in the database have
+            // been restored.
+            while let Some((key, value)) = restore_rx.recv().await {
+                if let Ok(key) = bincode::deserialize::<Key>(&key) {
+                    if let Some(value) = &*value {
+                        if let Ok(value) = serde_json::from_slice::<Value>(value) {
+                            if let Some(id) = (actor.identity)(&value) {
+                                println!("Adding item {:?} to list {:?} with {:?}", id, key, value);
+                                actor.add_key_to_list(id, key).await;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                println!("Skipping record")
+            }
+
+            println!("Completed restoring sublist. Starting up");
+            let _ = ready_tx.send(());
+
             loop {
                 tokio::select! {
                     change = subscribe_rx.recv() => {
-                        if let Some(change) = change{
+                        if let Some((change, tx)) = change{
                             actor.change(change).await;
+                            let _ = tx.send(());
                         }
                     },
                     message = actor_rx.recv() => {
@@ -139,8 +170,14 @@ where
 
         tokio::spawn(fut);
 
+        let restorer = SubTreeRestorer::new(restore_tx);
         let subscriber = SubTreeSubscriber::new(subscribe_tx);
         let tree = SubTree::new(actor_tx);
-        IndexTreeAddresses { subscriber, tree }
+        IndexTreeAddresses {
+            ready_rx,
+            restorer,
+            subscriber,
+            tree,
+        }
     }
 }

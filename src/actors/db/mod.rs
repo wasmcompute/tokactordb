@@ -7,6 +7,7 @@ use am::{Actor, ActorRef};
 
 use actor::DbActor;
 pub use messages::*;
+use tokio::sync::oneshot;
 
 use super::{
     subtree::SubTree,
@@ -18,6 +19,7 @@ use super::{
 pub struct Database {
     inner: ActorRef<DbActor>,
     trees: HashMap<String, GenericTree>,
+    startup_registry: Vec<oneshot::Receiver<()>>,
 }
 
 impl Database {
@@ -25,6 +27,7 @@ impl Database {
         Self {
             inner: DbActor::new().start(),
             trees: HashMap::new(),
+            startup_registry: Vec::new(),
         }
     }
 
@@ -63,11 +66,12 @@ impl Database {
         F: Fn(&Value) -> Option<&ID> + Send + Sync + 'static,
     {
         let tree = self.create::<ID, Vec<Key>>(name).await?;
-        let index_tree = source_tree.register_subscriber(tree, f);
+        let (index_tree, ready_rx) = source_tree.register_subscriber(tree, f).await;
+        self.startup_registry.push(ready_rx);
         Ok(index_tree)
     }
 
-    pub async fn restore(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+    pub async fn restore(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         let path = path.as_ref().to_path_buf();
         if !path.exists() {
             // there is no reason to restore
@@ -82,6 +86,11 @@ impl Database {
                 self.inner.async_ask(RestoreItem(item)).await.unwrap();
             }
         }
+        self.inner.async_ask(RestoreComplete).await.unwrap();
+        for ready in self.startup_registry.drain(..) {
+            let _ = ready.await;
+        }
+
         Ok(())
     }
 

@@ -95,6 +95,7 @@ impl Actor for WalActor {
 
 impl Handler<Insert> for WalActor {
     fn handle(&mut self, message: Insert, ctx: &mut am::Ctx<Self>) {
+        println!("Pushed Message...");
         self.buffer.push(message);
 
         // If no flush task is currently in the queue,

@@ -8,7 +8,10 @@ use std::sync::Arc;
 pub use actor::*;
 use am::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
 pub use messages::*;
-use tokio::sync::RwLock;
+use tokio::{
+    sync::{oneshot, RwLock},
+    task::JoinSet,
+};
 
 use self::list::ListStream;
 
@@ -66,16 +69,26 @@ where
         let record = UpdateRecord::new(id, json);
 
         let arc_key = Arc::new(key.clone());
-        let value_key = Arc::new(value);
+        let arc_value = Arc::new(value);
+        let subscribers = self
+            .subscribers
+            .try_read()
+            .unwrap()
+            .iter()
+            .map(Clone::clone)
+            .collect::<Vec<_>>();
 
         self.inner.async_ask(record).await.unwrap();
         // TODO(Alec): I know, I know, we should be doing something in between
         //             aware blocks but in this case it's ok, i swear!!!
-        for subscriber in self.subscribers.try_read().unwrap().iter() {
-            subscriber
-                .created(arc_key.clone(), value_key.clone())
-                .await
-                .unwrap();
+        let mut set = JoinSet::new();
+        for subscriber in subscribers.into_iter() {
+            let key = arc_key.clone();
+            let value = arc_value.clone();
+            set.spawn(subscriber.created(key, value));
+        }
+        while let Some(res) = set.join_next().await {
+            res?.unwrap();
         }
 
         Ok(key)
@@ -141,20 +154,32 @@ where
         ListStream::new(tree).await
     }
 
-    pub fn register_subscriber<ID, F>(
+    pub async fn register_subscriber<ID, F>(
         &self,
         tree: Tree<ID, Vec<Key>>,
         identity: F,
-    ) -> SubTree<ID, Value>
+    ) -> (SubTree<ID, Value>, oneshot::Receiver<()>)
     where
         ID: PrimaryKey,
         F: Fn(&Value) -> Option<&ID> + Send + Sync + 'static,
     {
         let source_tree = Self::new(self.inner.clone());
         let tree = IndexTreeActor::new(tree, source_tree, identity);
-        let IndexTreeAddresses { subscriber, tree } = tree.spawn();
+        let IndexTreeAddresses {
+            subscriber,
+            tree,
+            ready_rx,
+            restorer,
+        } = tree.spawn();
+        // TODO:
+        // 1. Send ready_rx to restore
+        // 2. Send restorer to tree actor
+        // 3. Once all messages have been sent and restored, send a message to all tree actors that it's time to start
+        // 4. wait for all ready_rx oneshot channels to recieve a message
+        // 5. database should be fully restored
+        self.inner.send_async(restorer).await.unwrap();
         self.subscribers.try_write().unwrap().push(subscriber);
-        tree
+        (tree, ready_rx)
     }
 
     pub(crate) fn as_generic(&self) -> GenericTree {

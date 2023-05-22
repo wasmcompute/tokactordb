@@ -8,7 +8,10 @@ use crate::actors::{
     GenericTree,
 };
 
-use super::messages::{NewTreeRoot, Restore, RestoreItem, TreeRoot};
+use super::{
+    messages::{NewTreeRoot, Restore, RestoreItem, TreeRoot},
+    RestoreComplete,
+};
 
 pub struct DbActor {
     wal: Option<Wal>,
@@ -67,6 +70,19 @@ impl AsyncAsk<Restore> for DbActor {
                 WalRestoredItems::new(vec![])
             } else {
                 wal_address.restore(wal_path).await
+            }
+        })
+    }
+}
+
+impl AsyncAsk<RestoreComplete> for DbActor {
+    type Result = ();
+
+    fn handle(&mut self, _: RestoreComplete, ctx: &mut am::Ctx<Self>) -> AsyncHandle<Self::Result> {
+        let trees = self.trees.values().map(Clone::clone).collect::<Vec<_>>();
+        ctx.anonymous_handle(async move {
+            for tree in trees {
+                tree.send_restore_complete().await;
             }
         })
     }

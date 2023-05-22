@@ -311,7 +311,7 @@ async fn run() -> anyhow::Result<()> {
             break;
         }
 
-        let buffer = cli.read_line("Would you like to exit?")?;
+        let buffer = cli.read_line("Would you like to exit? ")?;
         if buffer == "yes" {
             break;
         }

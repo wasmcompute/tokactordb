@@ -1,6 +1,12 @@
+use std::sync::Arc;
+
 use am::{Actor, Ask, AsyncAsk, AsyncHandle, Handler};
 
-use crate::actors::{db::RestoreItem, wal::Wal};
+use crate::actors::{
+    db::{RestoreComplete, RestoreItem},
+    subtree::SubTreeRestorer,
+    wal::Wal,
+};
 
 use super::{
     memtable::MemTable, GetMemTableSnapshot, GetRecord, GetRecordResult, GetUniqueKey,
@@ -13,6 +19,8 @@ pub struct TreeActor {
     memtable: MemTable,
     max: Option<Vec<u8>>,
     wal: Wal,
+    sub_trees: Option<Vec<SubTreeRestorer>>,
+    write_enabled: bool,
 }
 
 impl TreeActor {
@@ -22,6 +30,8 @@ impl TreeActor {
             memtable: MemTable::new(),
             max: None,
             wal,
+            sub_trees: None,
+            write_enabled: false,
         }
     }
 
@@ -95,10 +105,13 @@ where
             .insert(serailize_key.clone(), Some(msg.value.clone()));
 
         self.max = Some(serailize_key.clone());
+        let write_enabled: bool = self.write_enabled;
         ctx.anonymous_handle(async move {
-            if let Err(err) = wal.write(table, serailize_key, msg.value).await {
-                println!("{err}");
-                println!("Insertion failed to succeed")
+            if write_enabled {
+                if let Err(err) = wal.write(table, serailize_key, msg.value).await {
+                    println!("{err}");
+                    println!("Insertion failed to succeed")
+                }
             }
             InsertSuccess::new(key)
         })
@@ -113,10 +126,13 @@ impl AsyncAsk<UpdateRecord> for TreeActor {
         let table = self.name.clone();
         self.memtable
             .insert(msg.key.clone(), Some(msg.value.clone()));
+        let write_enabled: bool = self.write_enabled;
         ctx.anonymous_handle(async move {
-            if let Err(err) = wal.write(table, msg.key, msg.value).await {
-                println!("{err}");
-                println!("Insertion failed to succeed")
+            if write_enabled {
+                if let Err(err) = wal.write(table, msg.key, msg.value).await {
+                    println!("{err}");
+                    println!("Insertion failed to succeed")
+                }
             }
         })
     }
@@ -155,9 +171,38 @@ impl Ask<GetMemTableSnapshot> for TreeActor {
 }
 
 impl Handler<RestoreItem> for TreeActor {
-    fn handle(&mut self, item: RestoreItem, _: &mut am::Ctx<Self>) {
+    fn handle(&mut self, item: RestoreItem, ctx: &mut am::Ctx<Self>) {
         let key = item.0.key;
         let value = item.0.value;
-        self.memtable.insert(key, value);
+        self.memtable.insert(key.clone(), value.clone());
+
+        if let Some(list) = self.sub_trees.clone() {
+            ctx.anonymous_task(async move {
+                let key = Arc::new(key);
+                let value = Arc::new(value);
+                for item in list {
+                    item.restore_record(key.clone(), value.clone()).await;
+                }
+            });
+        }
+    }
+}
+
+impl Ask<RestoreComplete> for TreeActor {
+    type Result = ();
+
+    fn handle(&mut self, _: RestoreComplete, _: &mut am::Ctx<Self>) -> Self::Result {
+        // Basically just take all of the subtrees messages. When this happen, the subtree
+        // will stop restoring messages and move into a ready state.
+        let _ = self.sub_trees.take();
+        self.write_enabled = true;
+    }
+}
+
+impl Handler<SubTreeRestorer> for TreeActor {
+    fn handle(&mut self, sub_tree: SubTreeRestorer, _: &mut am::Ctx<Self>) {
+        let mut list = self.sub_trees.take().unwrap_or(vec![]);
+        list.push(sub_tree);
+        self.sub_trees = Some(list);
     }
 }

@@ -7,7 +7,6 @@ use crate::{
     AutoIncrement,
 };
 
-#[derive(Debug)]
 pub struct ID<Key: PrimaryKey, Value: RecordValue + 'static> {
     key: Key,
     _value: PhantomData<Value>,
@@ -92,6 +91,12 @@ impl<Key: PrimaryKey, Value: RecordValue + 'static> From<Key> for ID<Key, Value>
 impl<Key: PrimaryKey, Value: RecordValue + 'static> std::fmt::Display for ID<Key, Value> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.key)
+    }
+}
+
+impl<Key: PrimaryKey, Value: RecordValue + 'static> std::fmt::Debug for ID<Key, Value> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ID").field("key", &self.key).finish()
     }
 }
 
