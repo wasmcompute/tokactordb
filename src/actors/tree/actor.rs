@@ -3,9 +3,9 @@ use am::{Actor, Ask, AsyncAsk, AsyncHandle, Handler};
 use crate::actors::{db::RestoreItem, wal::Wal};
 
 use super::{
-    memtable::MemTable, AddGenericTree, GenericTree, GetMemTableSnapshot, GetRecord,
-    GetRecordResult, InsertRecord, InsertSuccess, ListEnd, ListEndResult, PrimaryKey, Record,
-    Snapshot, UpdateRecord,
+    memtable::MemTable, GetMemTableSnapshot, GetRecord, GetRecordResult, GetUniqueKey,
+    InsertRecord, InsertSuccess, ListEnd, ListEndResult, PrimaryKey, Record, Snapshot, UniqueKey,
+    UpdateRecord,
 };
 
 pub struct TreeActor {
@@ -13,7 +13,6 @@ pub struct TreeActor {
     memtable: MemTable,
     max: Option<Vec<u8>>,
     wal: Wal,
-    subscribers: Vec<GenericTree>,
 }
 
 impl TreeActor {
@@ -23,12 +22,42 @@ impl TreeActor {
             memtable: MemTable::new(),
             max: None,
             wal,
-            subscribers: Vec::new(),
         }
+    }
+
+    pub fn get_unique_id<Key: PrimaryKey>(&mut self) -> Key {
+        let key = if let Some(max) = self.max.as_ref() {
+            let mut key: Key = bincode::deserialize(max).unwrap();
+            key.increment()
+        } else {
+            // TODO(Alec): Implementing a hack because i just want to move forward
+            //             with my life. Scan the entire memtable to find the largest
+            //             ID key. This shouldn't be what we actual use if we ever
+            //             move to production
+            if self.memtable.is_empty() {
+                Key::default()
+            } else {
+                // This is where the hack is (is this really a hack tho...)
+                let (max_key, _) = self.memtable.get_last().unwrap();
+                let mut key: Key = bincode::deserialize(&max_key).unwrap();
+                key.increment()
+            }
+        };
+        let serailize_key: Vec<u8> = bincode::serialize(&key).unwrap();
+        self.max = Some(serailize_key);
+        key
     }
 }
 
 impl Actor for TreeActor {}
+
+impl<Key: PrimaryKey> Ask<GetUniqueKey<Key>> for TreeActor {
+    type Result = UniqueKey<Key>;
+
+    fn handle(&mut self, _: GetUniqueKey<Key>, _: &mut am::Ctx<Self>) -> Self::Result {
+        UniqueKey(self.get_unique_id())
+    }
+}
 
 impl<Key> AsyncAsk<InsertRecord<Key>> for TreeActor
 where
@@ -60,7 +89,7 @@ where
         };
         let wal = self.wal.clone();
         let table = self.name.clone();
-        let serailize_key = bincode::serialize(&key).unwrap();
+        let serailize_key: Vec<u8> = bincode::serialize(&key).unwrap();
 
         self.memtable
             .insert(serailize_key.clone(), Some(msg.value.clone()));
@@ -122,14 +151,6 @@ impl Ask<GetMemTableSnapshot> for TreeActor {
         Snapshot {
             list: self.memtable.as_sorted_vec(),
         }
-    }
-}
-
-impl Ask<AddGenericTree> for TreeActor {
-    type Result = ();
-
-    fn handle(&mut self, msg: AddGenericTree, _: &mut am::Ctx<Self>) -> Self::Result {
-        self.subscribers.push(msg.inner)
     }
 }
 

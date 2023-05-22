@@ -5,6 +5,7 @@ mod collection;
 // pub use collection::Collection;
 
 /// Record the key that was updated along with the state that was changed.
+#[derive(Debug)]
 pub struct Change<K, V> {
     pub key: K,
     pub update: Update<V>,
@@ -12,6 +13,7 @@ pub struct Change<K, V> {
 
 /// Updates to a given record. A new record will be a [`Update::Set`] operation
 /// with old being set to None. Otherwise old will be set.
+#[derive(Debug)]
 pub enum Update<T> {
     Set { old: Option<T>, new: T },
     Del { old: T },

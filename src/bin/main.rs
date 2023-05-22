@@ -4,7 +4,7 @@ use std::{
     time::SystemTime,
 };
 
-use conventually::{Aggregate, Change, Database, Tree, Update, ID, U32, U64};
+use conventually::{Aggregate, Change, Database, SubTree, Tree, Update, ID, U32, U64};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Ticket {
@@ -230,6 +230,7 @@ async fn tickets<'a>(
     cli: &mut Cli<'a>,
     board: ID<U32, Board>,
     ticket_store: &Tree<U64, Ticket>,
+    board_tickets: &SubTree<ID<U32, Board>, Ticket>,
 ) -> anyhow::Result<()> {
     loop {
         let cmd = cli.read_line("> ")?.to_lowercase();
@@ -267,11 +268,9 @@ async fn tickets<'a>(
                 }
             }
             "list" => {
-                let mut list = ticket_store.list().await;
-                while let Some((id, ticket)) = list.next().await {
-                    if let Some(ticket) = ticket {
-                        cli.write(format!("{} -> {}", id, ticket))?;
-                    }
+                let list = board_tickets.get(board.clone()).await?;
+                for ticket in list {
+                    cli.write(format!("{}", ticket))?;
                 }
             }
             "quit" | "exit" | "q" | "e" => {
@@ -293,9 +292,9 @@ async fn run() -> anyhow::Result<()> {
     let mut db = Database::new();
     // let mut db = Database::restore(".db/wal")?;
     let board_store = db.create::<U32, Board>("Boards").await?;
-    let mut ticket_store = db.create::<U64, Ticket>("Tickets").await?;
+    let ticket_store = db.create::<U64, Ticket>("Tickets").await?;
     let board_tickets = db
-        .create_index("Board Ticket Index", &mut ticket_store, |value| {
+        .create_index("Board Ticket Index", &ticket_store, |value| {
             Some(&value.board)
         })
         .await?;
@@ -307,7 +306,7 @@ async fn run() -> anyhow::Result<()> {
 
     loop {
         if let Some(board) = board(&mut cli, &board_store).await? {
-            tickets(&mut cli, board, &ticket_store).await?;
+            tickets(&mut cli, board, &ticket_store, &board_tickets).await?;
         } else {
             break;
         }

@@ -121,3 +121,16 @@ pub struct AddGenericTree {
     pub inner: GenericTree,
 }
 impl Message for AddGenericTree {}
+
+#[derive(Debug)]
+pub struct GetUniqueKey<Key: PrimaryKey>(PhantomData<Key>);
+impl<Key: PrimaryKey> Default for GetUniqueKey<Key> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+impl<Key: PrimaryKey> Message for GetUniqueKey<Key> {}
+
+#[derive(Debug)]
+pub struct UniqueKey<Key: PrimaryKey>(pub Key);
+impl<Key: PrimaryKey> Message for UniqueKey<Key> {}

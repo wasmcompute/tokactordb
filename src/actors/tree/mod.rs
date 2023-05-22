@@ -3,9 +3,12 @@ mod list;
 mod memtable;
 mod messages;
 
+use std::sync::Arc;
+
 pub use actor::*;
 use am::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
 pub use messages::*;
+use tokio::sync::RwLock;
 
 use self::list::ListStream;
 
@@ -29,7 +32,7 @@ where
     Value: RecordValue,
 {
     inner: ActorRef<TreeActor>,
-    subscribers: Vec<SubTreeSubscriber<Key, Value>>,
+    subscribers: Arc<RwLock<Vec<SubTreeSubscriber<Key, Value>>>>,
 }
 
 impl<Key, Value> Tree<Key, Value>
@@ -40,25 +43,61 @@ where
     pub fn new(inner: ActorRef<TreeActor>) -> Self {
         Self {
             inner,
-            subscribers: vec![],
+            subscribers: Arc::new(RwLock::new(vec![])),
         }
+    }
+
+    async fn get_unique_key(&self) -> anyhow::Result<Key> {
+        Ok(self
+            .inner
+            .ask(GetUniqueKey::<Key>::default())
+            .await
+            .unwrap()
+            .0)
     }
 
     pub async fn insert(&self, value: Value) -> anyhow::Result<Key>
     where
         Key: PrimaryKey,
     {
+        let key = self.get_unique_key().await.unwrap();
+        let id = bincode::serialize(&key)?;
         let json = serde_json::to_vec(&value)?;
-        let record = InsertRecord::new(json);
-        let response = self.inner.async_ask(record).await.unwrap();
-        Ok(response.key)
+        let record = UpdateRecord::new(id, json);
+
+        let arc_key = Arc::new(key.clone());
+        let value_key = Arc::new(value);
+
+        self.inner.async_ask(record).await.unwrap();
+        // TODO(Alec): I know, I know, we should be doing something in between
+        //             aware blocks but in this case it's ok, i swear!!!
+        for subscriber in self.subscribers.try_read().unwrap().iter() {
+            subscriber
+                .created(arc_key.clone(), value_key.clone())
+                .await
+                .unwrap();
+        }
+
+        Ok(key)
     }
 
     pub async fn update(&self, id: impl Into<Key>, value: Value) -> anyhow::Result<()> {
-        let id = bincode::serialize(&id.into())?;
-        let value = serde_json::to_vec(&value)?;
-        let record = UpdateRecord::new(id, value);
+        let key = id.into();
+        let old = self.get(key.clone()).await?.map(Arc::new);
+
+        let id = bincode::serialize(&key)?;
+        let json = serde_json::to_vec(&value)?;
+        let record = UpdateRecord::new(id, json);
         self.inner.async_ask(record).await.unwrap();
+
+        let new = Arc::new(value);
+        let key = Arc::new(key);
+        for subscriber in self.subscribers.try_read().unwrap().iter() {
+            subscriber
+                .updated(key.clone(), old.clone(), new.clone())
+                .await
+                .unwrap();
+        }
         Ok(())
     }
 
@@ -103,18 +142,18 @@ where
     }
 
     pub fn register_subscriber<ID, F>(
-        &mut self,
+        &self,
         tree: Tree<ID, Vec<Key>>,
         identity: F,
     ) -> SubTree<ID, Value>
     where
         ID: PrimaryKey,
-        F: Fn(&Value) -> Option<&ID> + 'static,
+        F: Fn(&Value) -> Option<&ID> + Send + Sync + 'static,
     {
         let source_tree = Self::new(self.inner.clone());
         let tree = IndexTreeActor::new(tree, source_tree, identity);
         let IndexTreeAddresses { subscriber, tree } = tree.spawn();
-        self.subscribers.push(subscriber);
+        self.subscribers.try_write().unwrap().push(subscriber);
         tree
     }
 
