@@ -97,17 +97,44 @@ where
 
         let id = bincode::serialize(&key)?;
         let json = serde_json::to_vec(&value)?;
+
+        let arc_key = Arc::new(key.clone());
+        let arc_value = Arc::new(value);
+        let subscribers = self
+            .subscribers
+            .try_read()
+            .unwrap()
+            .iter()
+            .map(Clone::clone)
+            .collect::<Vec<_>>();
+
         let record = UpdateRecord::new(id, json);
         self.inner.async_ask(record).await.unwrap();
 
-        let new = Arc::new(value);
-        let key = Arc::new(key);
-        for subscriber in self.subscribers.try_read().unwrap().iter() {
-            subscriber
-                .updated(key.clone(), old.clone(), new.clone())
-                .await
-                .unwrap();
-        }
+        // UGGGHHH, this should be done within a transaction! Yes! One change
+        // can lead to many more changes happening, but ALL WE CARE ABOUT IS THAT
+        // OUR WRITE SUCCEEDED.
+        //
+        // We should be able to wait for all updates to complete though from within
+        // the transaction.
+        //
+        // We do need to figure out a better way to do this, but maybe we just do
+        // versioning first
+        tokio::spawn(async move {
+            // TODO(Alec): I know, I know, we should be doing something in between
+            //             aware blocks but in this case it's ok, i swear!!!
+            let mut set = JoinSet::new();
+            for subscriber in subscribers.into_iter() {
+                let key = arc_key.clone();
+                let value = arc_value.clone();
+                let old = old.clone();
+                set.spawn(async move { subscriber.updated(key, old, value).await });
+            }
+            while let Some(res) = set.join_next().await {
+                res.unwrap().unwrap();
+            }
+        });
+
         Ok(())
     }
 
@@ -164,7 +191,10 @@ where
     }
 
     pub(crate) fn duplicate(&self) -> Self {
-        Self::new(self.inner.clone())
+        Self {
+            inner: self.inner.clone(),
+            subscribers: Arc::clone(&self.subscribers),
+        }
     }
 }
 

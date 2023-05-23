@@ -22,6 +22,7 @@ pub struct AggregateTreeActor<
     identity: Box<IdentityFn<ID, Value>>,
 }
 
+#[derive(Debug)]
 enum Operation {
     Create,
     Update,
@@ -197,7 +198,6 @@ where
                 println!("Skipping record")
             }
 
-            println!("Completed restoring sublist. Starting up");
             let _ = ready_tx.send(());
 
             loop {

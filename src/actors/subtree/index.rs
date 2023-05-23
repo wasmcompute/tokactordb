@@ -121,6 +121,12 @@ where
             if let Some(key) = ids.get(index) {
                 if let Some(mut value) = self.source_tree.get(key.clone()).await.unwrap() {
                     (op)(&mut value);
+                    // TODO(Alec): This needs to call a "special" update method that
+                    // doesn't wait for "subscribors" to finish. otherwise, we
+                    // block our selves from ever finishing the update.
+                    //
+                    // WE CAN'T CALL Tree::update, Tree::create from within a
+                    // child collection because we could be listening for subscrptions
                     self.source_tree.update(key.clone(), value).await.unwrap();
                     return Some(());
                 }
@@ -181,7 +187,6 @@ where
                                     tx.send(actor.get_item_by_index(id, index, op).await).unwrap();
                                 }
                             }
-
                         }
                     }
                 }
