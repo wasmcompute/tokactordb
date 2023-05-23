@@ -7,16 +7,9 @@ use crate::{
     Change, Tree, Update,
 };
 
-use super::{SubTree, SubTreeRestorer, SubTreeSubscriber};
+use super::{SubTree, SubTreeRestorer, SubTreeSubscriber, UtilTreeAddress};
 
 type IdentityFn<ID, Value> = dyn Fn(&Value) -> Option<&ID> + Send + Sync + 'static;
-
-pub struct IndexTreeAddresses<ID: PrimaryKey, Key: PrimaryKey, Value: RecordValue> {
-    pub ready_rx: oneshot::Receiver<()>,
-    pub restorer: SubTreeRestorer,
-    pub subscriber: SubTreeSubscriber<Key, Value>,
-    pub tree: SubTree<ID, Value>,
-}
 
 pub struct IndexTreeActor<ID: PrimaryKey, Key: PrimaryKey, Value: RecordValue> {
     tree: Tree<ID, Vec<Key>>,
@@ -65,7 +58,9 @@ where
                             (None, Some(new_id)) => {
                                 self.add_key_to_list(new_id, (*change.key).clone()).await;
                             }
-                            (None, None) => {}
+                            (None, None) => {
+                                unreachable!("The identity function changed. If this triggers, our index sub tree now has bad data");
+                            }
                         }
                     }
                     None => {
@@ -115,7 +110,7 @@ where
         }
     }
 
-    pub fn spawn(self) -> IndexTreeAddresses<ID, Key, Value> {
+    pub fn spawn(self) -> UtilTreeAddress<SubTree<ID, Value>, Key, Value> {
         let (ready_tx, ready_rx) = oneshot::channel();
         let (restore_tx, mut restore_rx) =
             mpsc::channel::<(Arc<Vec<u8>>, Arc<Option<Vec<u8>>>)>(10);
@@ -173,7 +168,7 @@ where
         let restorer = SubTreeRestorer::new(restore_tx);
         let subscriber = SubTreeSubscriber::new(subscribe_tx);
         let tree = SubTree::new(actor_tx);
-        IndexTreeAddresses {
+        UtilTreeAddress {
             ready_rx,
             restorer,
             subscriber,

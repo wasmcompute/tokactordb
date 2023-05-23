@@ -1,11 +1,13 @@
-mod actor;
+mod aggregate;
+mod index;
 
 use std::sync::Arc;
 
 use am::Message;
 use tokio::sync::mpsc;
 
-pub use actor::{IndexTreeActor, IndexTreeAddresses};
+pub use aggregate::AggregateTreeActor;
+pub use index::IndexTreeActor;
 use tokio::sync::oneshot;
 
 use crate::{Change, Update};
@@ -104,4 +106,28 @@ impl<ID: PrimaryKey, Value: RecordValue> SubTree<ID, Value> {
         let list = rx.await?;
         Ok(list)
     }
+}
+
+pub struct AggregateTree<ID: PrimaryKey, Value: RecordValue> {
+    inner: mpsc::Sender<(ID, oneshot::Sender<Option<Value>>)>,
+}
+
+impl<ID: PrimaryKey, Value: RecordValue> AggregateTree<ID, Value> {
+    pub fn new(inner: mpsc::Sender<(ID, oneshot::Sender<Option<Value>>)>) -> Self {
+        Self { inner }
+    }
+
+    pub async fn get(&self, key: ID) -> anyhow::Result<Option<Value>> {
+        let (tx, rx) = oneshot::channel();
+        self.inner.send((key, tx)).await?;
+        let item = rx.await?;
+        Ok(item)
+    }
+}
+
+pub struct UtilTreeAddress<Tree, Key: PrimaryKey, Value: RecordValue> {
+    pub ready_rx: oneshot::Receiver<()>,
+    pub restorer: SubTreeRestorer,
+    pub subscriber: SubTreeSubscriber<Key, Value>,
+    pub tree: Tree,
 }

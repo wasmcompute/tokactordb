@@ -31,7 +31,7 @@ pub enum Update<T> {
 ///
 /// Subscribing to a given record is best only if you plan on aggragating records
 /// together.
-pub trait Aggregate<K, V> {
+pub trait Aggregate<K, V>: Default {
     fn observe(&mut self, change: Change<&K, &V>);
 }
 

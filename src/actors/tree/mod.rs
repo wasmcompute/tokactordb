@@ -8,15 +8,12 @@ use std::sync::Arc;
 pub use actor::*;
 use am::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
 pub use messages::*;
-use tokio::{
-    sync::{oneshot, RwLock},
-    task::JoinSet,
-};
+use tokio::{sync::RwLock, task::JoinSet};
 
 use self::list::ListStream;
 
 use super::{
-    subtree::{IndexTreeActor, IndexTreeAddresses, SubTree, SubTreeSubscriber},
+    subtree::{SubTreeRestorer, SubTreeSubscriber},
     wal::Wal,
     GenericTree,
 };
@@ -154,36 +151,20 @@ where
         ListStream::new(tree).await
     }
 
-    pub async fn register_subscriber<ID, F>(
-        &self,
-        tree: Tree<ID, Vec<Key>>,
-        identity: F,
-    ) -> (SubTree<ID, Value>, oneshot::Receiver<()>)
-    where
-        ID: PrimaryKey,
-        F: Fn(&Value) -> Option<&ID> + Send + Sync + 'static,
-    {
-        let source_tree = Self::new(self.inner.clone());
-        let tree = IndexTreeActor::new(tree, source_tree, identity);
-        let IndexTreeAddresses {
-            subscriber,
-            tree,
-            ready_rx,
-            restorer,
-        } = tree.spawn();
-        // TODO:
-        // 1. Send ready_rx to restore
-        // 2. Send restorer to tree actor
-        // 3. Once all messages have been sent and restored, send a message to all tree actors that it's time to start
-        // 4. wait for all ready_rx oneshot channels to recieve a message
-        // 5. database should be fully restored
-        self.inner.send_async(restorer).await.unwrap();
+    pub fn register_subscriber(&self, subscriber: SubTreeSubscriber<Key, Value>) {
         self.subscribers.try_write().unwrap().push(subscriber);
-        (tree, ready_rx)
+    }
+
+    pub async fn register_restorer(&self, restorer: SubTreeRestorer) {
+        self.inner.send_async(restorer).await.unwrap();
     }
 
     pub(crate) fn as_generic(&self) -> GenericTree {
         GenericTree::new(self.inner.clone())
+    }
+
+    pub(crate) fn duplicate(&self) -> Self {
+        Self::new(self.inner.clone())
     }
 }
 

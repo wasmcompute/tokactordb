@@ -4,7 +4,26 @@ use std::{
     time::SystemTime,
 };
 
-use conventually::{Aggregate, Change, Database, SubTree, Tree, Update, ID, U32, U64};
+use conventually::{
+    Aggregate, AggregateTree, Change, Database, SubTree, Tree, Update, ID, U32, U64,
+};
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Board {
+    name: String,
+}
+
+impl Board {
+    pub fn new(name: String) -> Self {
+        Self { name }
+    }
+}
+
+impl std::fmt::Display for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Ticket {
@@ -46,88 +65,64 @@ impl std::fmt::Display for Ticket {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct TotalTickets {
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct TicketBoardStatistics {
     total: usize,
+    todos: usize,
+    complete: usize,
+    archived: usize,
 }
-impl Aggregate<u64, Ticket> for TotalTickets {
-    fn observe(&mut self, change: Change<&u64, &Ticket>) {
+
+impl Aggregate<U64, Ticket> for TicketBoardStatistics {
+    fn observe(&mut self, change: Change<&U64, &Ticket>) {
         match change.update {
-            Update::Set { old, new: _ } => {
-                if old.is_none() {
-                    self.total += 1;
+            Update::Set { old, new } => {
+                match old {
+                    Some(old_ticket) => {
+                        // A old ticket was updated to a new ticket
+                        if !old_ticket.completed && new.completed {
+                            self.complete += 1;
+                        } else if old_ticket.completed && !new.completed {
+                            self.complete -= 1;
+                        }
+                        if !old_ticket.deleted && new.deleted {
+                            self.archived += 1;
+                        } else if old_ticket.deleted && !new.deleted {
+                            self.archived -= 1;
+                        }
+                        if !old_ticket.completed && new.completed
+                            || !old_ticket.deleted && new.deleted
+                        {
+                            self.todos -= 1;
+                        } else if !new.completed
+                            && !new.deleted
+                            && (old_ticket.completed || old_ticket.deleted)
+                        {
+                            self.todos += 1;
+                        }
+                    }
+                    None => {
+                        // creating a new ticket
+                        self.complete += if new.completed { 1 } else { 0 };
+                        self.archived += if new.deleted { 1 } else { 0 };
+                        self.todos += if new.completed || new.deleted { 0 } else { 1 };
+                        self.total += 1;
+                    }
                 }
             }
-            Update::Del { old: _ } => {
+            Update::Del { old } => {
                 self.total -= 1;
-            }
-        };
-    }
-}
-
-struct TotalCompletedTickets {
-    total: usize,
-}
-impl Aggregate<u64, Ticket> for TotalCompletedTickets {
-    fn observe(&mut self, change: Change<&u64, &Ticket>) {
-        let change = match change.update {
-            Update::Set { old, new } => {
-                if let Some(old) = old {
-                    if old.completed && new.completed {
-                        0
-                    } else if new.completed {
-                        1
-                    } else {
-                        0
-                    }
-                } else if new.completed {
-                    1
-                } else {
-                    0
-                }
-            }
-            Update::Del { old } => {
                 if old.completed {
-                    -1
-                } else {
-                    0
+                    self.complete -= 1;
                 }
-            }
-        };
-        self.total = (self.total as isize + change) as usize;
-    }
-}
-
-struct TotalArchivedTickets {
-    total: usize,
-}
-impl Aggregate<u64, Ticket> for TotalArchivedTickets {
-    fn observe(&mut self, change: Change<&u64, &Ticket>) {
-        let change = match change.update {
-            Update::Set { old, new } => {
-                if let Some(old) = old {
-                    if old.deleted && new.deleted {
-                        0
-                    } else if new.deleted {
-                        1
-                    } else {
-                        0
-                    }
-                } else if new.deleted {
-                    1
-                } else {
-                    0
-                }
-            }
-            Update::Del { old } => {
                 if old.deleted {
-                    -1
-                } else {
-                    0
+                    self.archived -= 1;
+                }
+                if !old.completed && !old.deleted {
+                    self.todos -= 1;
                 }
             }
-        };
-        self.total = (self.total as isize + change) as usize;
+        }
     }
 }
 
@@ -168,23 +163,6 @@ impl<'a> Cli<'a> {
     pub fn error(&mut self, text: impl AsRef<str>) -> anyhow::Result<()> {
         writeln!(self.stdout, "{}", text.as_ref())?;
         Ok(())
-    }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct Board {
-    name: String,
-}
-
-impl Board {
-    pub fn new(name: String) -> Self {
-        Self { name }
-    }
-}
-
-impl std::fmt::Display for Board {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
     }
 }
 
@@ -231,6 +209,7 @@ async fn tickets<'a>(
     board: ID<U32, Board>,
     ticket_store: &Tree<U64, Ticket>,
     board_tickets: &SubTree<ID<U32, Board>, Ticket>,
+    board_stats: &AggregateTree<ID<U32, Board>, TicketBoardStatistics>,
 ) -> anyhow::Result<()> {
     loop {
         let cmd = cli.read_line("> ")?.to_lowercase();
@@ -245,6 +224,7 @@ async fn tickets<'a>(
             "complete" | "archive" => {
                 let str_id = cli.read_line("Id > ")?;
                 let id = str_id.trim().parse::<u64>()?;
+
                 if let Some(mut ticket) = ticket_store.get(id).await.unwrap() {
                     if cmd == "complete" {
                         ticket.completed = true;
@@ -268,10 +248,16 @@ async fn tickets<'a>(
                 }
             }
             "list" => {
+                let stat = board_stats.get(board.clone()).await?.unwrap_or_default();
+                cli.write(format!(
+                    "{} Todos, {} Complete, {} Archived",
+                    stat.todos, stat.complete, stat.archived
+                ))?;
                 let list = board_tickets.get(board.clone()).await?;
                 for ticket in list {
                     cli.write(format!("{}", ticket))?;
                 }
+                cli.write(format!("Total: {}", stat.total))?;
             }
             "quit" | "exit" | "q" | "e" => {
                 cli.write("Saving Board to Disk...")?;
@@ -298,6 +284,14 @@ async fn run() -> anyhow::Result<()> {
             Some(&value.board)
         })
         .await?;
+    let board_statistics = db
+        .create_aggregate(
+            "Board Ticket Stats",
+            &ticket_store,
+            TicketBoardStatistics::default(),
+            |value| Some(&value.board),
+        )
+        .await?;
 
     // let mut total_ticket_count = db.aggragate::<u32, Ticket, TotalTickets>("Total Tickets")?;
     db.restore(".db").await?;
@@ -306,7 +300,14 @@ async fn run() -> anyhow::Result<()> {
 
     loop {
         if let Some(board) = board(&mut cli, &board_store).await? {
-            tickets(&mut cli, board, &ticket_store, &board_tickets).await?;
+            tickets(
+                &mut cli,
+                board,
+                &ticket_store,
+                &board_tickets,
+                &board_statistics,
+            )
+            .await?;
         } else {
             break;
         }

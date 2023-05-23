@@ -9,6 +9,7 @@ mod tx;
 use std::fmt::{Debug, Display};
 
 pub use actors::db::Database;
+pub use actors::subtree::AggregateTree;
 pub use actors::subtree::SubTree;
 pub use actors::tree::Tree;
 use actors::tree::{PrimaryKey, RecordValue};

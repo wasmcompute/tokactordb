@@ -9,8 +9,10 @@ use actor::DbActor;
 pub use messages::*;
 use tokio::sync::oneshot;
 
+use crate::Aggregate;
+
 use super::{
-    subtree::SubTree,
+    subtree::{AggregateTree, AggregateTreeActor, IndexTreeActor, SubTree, UtilTreeAddress},
     tree::{PrimaryKey, RecordValue, Tree},
     wal::WalRestoredItems,
     GenericTree,
@@ -57,7 +59,7 @@ impl Database {
         &mut self,
         name: impl ToString,
         source_tree: &Tree<Key, Value>,
-        f: F,
+        identity: F,
     ) -> anyhow::Result<SubTree<ID, Value>>
     where
         Key: PrimaryKey,
@@ -66,9 +68,49 @@ impl Database {
         F: Fn(&Value) -> Option<&ID> + Send + Sync + 'static,
     {
         let tree = self.create::<ID, Vec<Key>>(name).await?;
-        let (index_tree, ready_rx) = source_tree.register_subscriber(tree, f).await;
+        let source_tree_clone = source_tree.duplicate();
+        let tree = IndexTreeActor::new(tree, source_tree_clone, identity);
+        let UtilTreeAddress {
+            subscriber,
+            tree,
+            ready_rx,
+            restorer,
+        } = tree.spawn();
+
+        source_tree.register_restorer(restorer).await;
+        source_tree.register_subscriber(subscriber);
         self.startup_registry.push(ready_rx);
-        Ok(index_tree)
+        Ok(tree)
+    }
+
+    pub async fn create_aggregate<Record, Key, Value, ID, F>(
+        &mut self,
+        name: impl ToString,
+        source_tree: &Tree<Key, Value>,
+        _: Record,
+        identity: F,
+    ) -> anyhow::Result<AggregateTree<ID, Record>>
+    where
+        Record: Aggregate<Key, Value> + RecordValue + Default,
+        Key: PrimaryKey,
+        Value: RecordValue,
+        ID: PrimaryKey,
+        F: Fn(&Value) -> Option<&ID> + Send + Sync + 'static,
+    {
+        let tree = self.create::<ID, (Record, Vec<Key>)>(name).await?;
+        let source_tree_clone = source_tree.duplicate();
+        let tree = AggregateTreeActor::new(tree, source_tree_clone, identity);
+        let UtilTreeAddress {
+            subscriber,
+            tree,
+            ready_rx,
+            restorer,
+        } = tree.spawn();
+
+        source_tree.register_restorer(restorer).await;
+        source_tree.register_subscriber(subscriber);
+        self.startup_registry.push(ready_rx);
+        Ok(tree)
     }
 
     pub async fn restore(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
