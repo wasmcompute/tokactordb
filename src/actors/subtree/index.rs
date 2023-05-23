@@ -7,7 +7,7 @@ use crate::{
     Change, Tree, Update,
 };
 
-use super::{SubTree, SubTreeRestorer, SubTreeSubscriber, UtilTreeAddress};
+use super::{Request, SubTree, SubTreeRestorer, SubTreeSubscriber, UtilTreeAddress};
 
 type IdentityFn<ID, Value> = dyn Fn(&Value) -> Option<&ID> + Send + Sync + 'static;
 
@@ -110,13 +110,32 @@ where
         }
     }
 
+    async fn get_item_by_index(
+        &self,
+        id: ID,
+        index: usize,
+        op: Box<dyn Fn(&mut Value) + Send + Sync + 'static>,
+    ) -> Option<()> {
+        let ids = self.tree.get(id).await.unwrap();
+        if let Some(ids) = ids {
+            if let Some(key) = ids.get(index) {
+                if let Some(mut value) = self.source_tree.get(key.clone()).await.unwrap() {
+                    (op)(&mut value);
+                    self.source_tree.update(key.clone(), value).await.unwrap();
+                    return Some(());
+                }
+            }
+        }
+        None
+    }
+
     pub fn spawn(self) -> UtilTreeAddress<SubTree<ID, Value>, Key, Value> {
         let (ready_tx, ready_rx) = oneshot::channel();
         let (restore_tx, mut restore_rx) =
             mpsc::channel::<(Arc<Vec<u8>>, Arc<Option<Vec<u8>>>)>(10);
         let (subscribe_tx, mut subscribe_rx) =
             mpsc::channel::<(Change<Arc<Key>, Arc<Value>>, oneshot::Sender<()>)>(10);
-        let (actor_tx, mut actor_rx) = mpsc::channel::<(ID, oneshot::Sender<Vec<Value>>)>(10);
+        let (actor_tx, mut actor_rx) = mpsc::channel::<Request<ID, Value>>(10);
 
         let _subscribe_tx = subscribe_tx.clone();
         let fut = async move {
@@ -155,8 +174,14 @@ where
                         }
                     },
                     message = actor_rx.recv() => {
-                        if let Some((id, tx)) = message {
-                            let _ = tx.send(actor.get(id).await);
+                        if let Some(request) = message {
+                            match request {
+                                Request::List((id, tx)) => tx.send(actor.get(id).await).unwrap(),
+                                Request::Item((id, index, op, tx)) => {
+                                    tx.send(actor.get_item_by_index(id, index, op).await).unwrap();
+                                }
+                            }
+
                         }
                     }
                 }

@@ -222,19 +222,21 @@ async fn tickets<'a>(
                     .await?;
             }
             "complete" | "archive" => {
-                let str_id = cli.read_line("Id > ")?;
-                let id = str_id.trim().parse::<u64>()?;
+                let str_id = cli.read_line("Index > ")?;
+                let index = str_id.trim().parse::<usize>()?;
 
-                if let Some(mut ticket) = ticket_store.get(id).await.unwrap() {
-                    if cmd == "complete" {
-                        ticket.completed = true;
-                    } else if cmd == "archive" {
-                        ticket.deleted = true;
-                    }
-                    if let Err(err) = ticket_store.update(id, ticket).await {
-                        cli.error(format!("Failed to update key '{}' with error: {}", id, err))?;
-                    }
-                } else {
+                let result = board_tickets
+                    .mutate_by_index(board.clone(), index, move |ticket| {
+                        if cmd == "complete" {
+                            ticket.completed = true;
+                        } else if cmd == "archive" {
+                            ticket.deleted = true;
+                        }
+                    })
+                    .await
+                    .unwrap();
+
+                if result.is_none() {
                     cli.error(format!("ID {} does not exist", str_id.trim()))?;
                 }
             }
@@ -253,7 +255,7 @@ async fn tickets<'a>(
                     "{} Todos, {} Complete, {} Archived",
                     stat.todos, stat.complete, stat.archived
                 ))?;
-                let list = board_tickets.get(board.clone()).await?;
+                let list = board_tickets.list(board.clone()).await?;
                 for ticket in list {
                     cli.write(format!("{}", ticket))?;
                 }

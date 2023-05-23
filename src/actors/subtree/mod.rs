@@ -91,18 +91,56 @@ impl<Key: PrimaryKey, Value: RecordValue> SubTreeSubscriber<Key, Value> {
     }
 }
 
+pub enum Request<ID: PrimaryKey, Value: RecordValue> {
+    List((ID, oneshot::Sender<Vec<Value>>)),
+    Item(
+        (
+            ID,
+            usize,
+            Box<dyn Fn(&mut Value) + Send + Sync + 'static>,
+            oneshot::Sender<Option<()>>,
+        ),
+    ),
+}
+
+impl<ID: PrimaryKey, Value: RecordValue> std::fmt::Debug for Request<ID, Value> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::List(arg0) => f.debug_tuple("List").field(arg0).finish(),
+            Self::Item(arg0) => f
+                .debug_tuple("Item")
+                .field(&(&arg0.0, &arg0.1, &arg0.3))
+                .finish(),
+        }
+    }
+}
+
 pub struct SubTree<ID: PrimaryKey, Value: RecordValue> {
-    inner: mpsc::Sender<(ID, oneshot::Sender<Vec<Value>>)>,
+    inner: mpsc::Sender<Request<ID, Value>>,
 }
 
 impl<ID: PrimaryKey, Value: RecordValue> SubTree<ID, Value> {
-    pub fn new(inner: mpsc::Sender<(ID, oneshot::Sender<Vec<Value>>)>) -> Self {
+    pub fn new(inner: mpsc::Sender<Request<ID, Value>>) -> Self {
         Self { inner }
     }
 
-    pub async fn get(&self, key: ID) -> anyhow::Result<Vec<Value>> {
+    pub async fn list(&self, key: ID) -> anyhow::Result<Vec<Value>> {
         let (tx, rx) = oneshot::channel();
-        self.inner.send((key, tx)).await?;
+        self.inner.send(Request::List((key, tx))).await?;
+        let list = rx.await?;
+        Ok(list)
+    }
+
+    pub async fn mutate_by_index<F: Fn(&mut Value) + Send + Sync + 'static>(
+        &self,
+        id: ID,
+        index: usize,
+        f: F,
+    ) -> anyhow::Result<Option<()>> {
+        let (tx, rx) = oneshot::channel();
+        self.inner
+            .send(Request::Item((id, index, Box::new(f), tx)))
+            .await?;
         let list = rx.await?;
         Ok(list)
     }
