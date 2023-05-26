@@ -7,16 +7,18 @@ pub struct Item {
     pub crc: u32,
     timestamp: u128,
     pub table: String,
+    pub version: u16,
     pub key: Vec<u8>,
     pub value: Option<Vec<u8>>,
 }
 
 impl Item {
-    pub fn new(table: String, key: Vec<u8>, value: Option<Vec<u8>>) -> Self {
+    pub fn new(table: String, version: u16, key: Vec<u8>, value: Option<Vec<u8>>) -> Self {
         let mut item = Self {
             crc: 0,
             timestamp: now(),
             table,
+            version,
             key,
             value,
         };
@@ -29,6 +31,7 @@ impl Item {
         let mut digest = crc.digest();
         digest.update(&self.timestamp.to_be_bytes());
         digest.update(self.table.as_bytes());
+        digest.update(&self.version.to_be_bytes());
         digest.update(&self.key);
         digest.update(self.value.as_ref().unwrap_or(&vec![]));
         digest.finalize()
@@ -49,8 +52,8 @@ impl std::fmt::Display for Item {
         };
         write!(
             f,
-            "CRC: {}, table: {}, value: {}",
-            self.crc, self.table, value
+            "CRC: {}, table: {}, version: {}, value: {}",
+            self.crc, self.table, self.version, value
         )
     }
 }

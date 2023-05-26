@@ -1,26 +1,30 @@
 mod actor;
+mod builder;
 mod messages;
+mod version;
 
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 use am::{Actor, ActorRef};
 
 use actor::DbActor;
+pub use builder::TreeVersion;
 pub use messages::*;
 use tokio::sync::oneshot;
+pub use version::VersionedTree;
 
 use crate::Aggregate;
+
+use self::builder::TreeBuilder;
 
 use super::{
     subtree::{AggregateTree, AggregateTreeActor, IndexTreeActor, SubTree, UtilTreeAddress},
     tree::{PrimaryKey, RecordValue, Tree},
     wal::WalRestoredItems,
-    GenericTree,
 };
 
 pub struct Database {
     inner: ActorRef<DbActor>,
-    trees: HashMap<String, GenericTree>,
     startup_registry: Vec<oneshot::Receiver<()>>,
 }
 
@@ -28,31 +32,19 @@ impl Database {
     pub fn new() -> Self {
         Self {
             inner: DbActor::new().start(),
-            trees: HashMap::new(),
             startup_registry: Vec::new(),
         }
     }
 
-    pub async fn create<Key, Value>(
+    pub fn create<Key, Value>(
         &mut self,
         name: impl ToString,
-    ) -> anyhow::Result<Tree<Key, Value>>
+    ) -> anyhow::Result<TreeBuilder<Key, Value>>
     where
         Key: PrimaryKey,
         Value: RecordValue,
     {
-        let address = self
-            .inner
-            .ask(NewTreeRoot::new(name.to_string()))
-            .await
-            .unwrap()
-            .inner;
-
-        let tree = Tree::new(address);
-
-        self.trees.insert(name.to_string(), tree.as_generic());
-
-        Ok(tree)
+        TreeBuilder::new(self.inner.clone(), name.to_string())
     }
 
     pub async fn create_index<Key, Value, ID, F>(
@@ -67,7 +59,7 @@ impl Database {
         ID: PrimaryKey,
         F: Fn(&Value) -> Option<&ID> + Send + Sync + 'static,
     {
-        let tree = self.create::<ID, Vec<Key>>(name).await?;
+        let tree = self.create::<ID, Vec<Key>>(name)?.unwrap().await?;
         let source_tree_clone = source_tree.duplicate();
         let tree = IndexTreeActor::new(tree, source_tree_clone, identity);
         let UtilTreeAddress {
@@ -97,7 +89,10 @@ impl Database {
         ID: PrimaryKey,
         F: Fn(&Value) -> Option<&ID> + Send + Sync + 'static,
     {
-        let tree = self.create::<ID, (Record, Vec<Key>)>(name).await?;
+        let tree = self
+            .create::<ID, (Record, Vec<Key>)>(name)?
+            .unwrap()
+            .await?;
         let source_tree_clone = source_tree.duplicate();
         let tree = AggregateTreeActor::new(tree, source_tree_clone, identity);
         let UtilTreeAddress {

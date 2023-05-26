@@ -7,14 +7,17 @@ use am::{ActorRef, Message};
 
 use crate::actors::{tree::TreeActor, wal::Item};
 
+use super::builder::TreeVersion;
+
 #[derive(Debug)]
 pub struct NewTreeRoot {
     pub name: String,
+    pub versions: Vec<TreeVersion>,
 }
 
 impl NewTreeRoot {
-    pub fn new(name: String) -> Self {
-        Self { name }
+    pub fn new(name: String, versions: Vec<TreeVersion>) -> Self {
+        Self { name, versions }
     }
 }
 impl Message for NewTreeRoot {}

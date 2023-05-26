@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{any::Any, marker::PhantomData};
 
 use am::Message;
 use serde::{de::DeserializeOwned, Serialize};
@@ -8,17 +8,25 @@ use crate::AutoIncrement;
 use super::GenericTree;
 
 pub trait PrimaryKey:
-    Serialize + DeserializeOwned + AutoIncrement + std::fmt::Debug + Default + Send + Sync + 'static
+    Serialize
+    + DeserializeOwned
+    + AutoIncrement
+    + Any
+    + std::fmt::Debug
+    + Default
+    + Send
+    + Sync
+    + 'static
 {
 }
 
 pub trait RecordValue:
-    Serialize + DeserializeOwned + Send + Sync + std::fmt::Debug + 'static
+    Serialize + DeserializeOwned + Any + Default + Send + Sync + std::fmt::Debug + 'static
 {
 }
 
 impl<T> RecordValue for T where
-    T: Serialize + DeserializeOwned + Send + Sync + std::fmt::Debug + 'static
+    T: Serialize + DeserializeOwned + Any + Default + Send + Sync + std::fmt::Debug + 'static
 {
 }
 
@@ -65,27 +73,33 @@ impl UpdateRecord {
 impl Message for UpdateRecord {}
 
 #[derive(Debug)]
-pub struct GetRecord {
+pub struct GetRecord<Key: PrimaryKey, Value: RecordValue> {
     pub key: Vec<u8>,
+    pub _key: PhantomData<Key>,
+    pub _value: PhantomData<Value>,
 }
 
-impl GetRecord {
+impl<Key: PrimaryKey, Value: RecordValue> GetRecord<Key, Value> {
     pub fn new(key: Vec<u8>) -> Self {
-        Self { key }
+        Self {
+            key,
+            _key: PhantomData,
+            _value: PhantomData,
+        }
     }
 }
-impl Message for GetRecord {}
+impl<Key: PrimaryKey, Value: RecordValue> Message for GetRecord<Key, Value> {}
 
-pub struct GetRecordResult {
-    pub value: Option<Vec<u8>>,
+pub struct GetRecordResult<Value: RecordValue> {
+    pub value: Option<Value>,
 }
 
-impl GetRecordResult {
-    pub fn new(value: Option<Vec<u8>>) -> Self {
+impl<Value: RecordValue> GetRecordResult<Value> {
+    pub fn new(value: Option<Value>) -> Self {
         Self { value }
     }
 }
-impl Message for GetRecordResult {}
+impl<Value: RecordValue> Message for GetRecordResult<Value> {}
 
 #[derive(Debug)]
 pub enum ListEnd {
@@ -98,12 +112,37 @@ impl Message for ListEnd {}
 pub struct ListEndResult {
     pub option: Option<Record>,
 }
+
+impl ListEndResult {
+    pub fn none() -> Self {
+        Self { option: None }
+    }
+    pub fn key(key: Vec<u8>) -> Self {
+        Self {
+            option: Some(Record { key, value: None }),
+        }
+    }
+    pub fn new(key: Vec<u8>, value: Vec<u8>) -> Self {
+        Self {
+            option: Some(Record {
+                key,
+                value: Some(value),
+            }),
+        }
+    }
+}
 impl Message for ListEndResult {}
 
 #[derive(Debug)]
 pub struct Record {
     pub key: Vec<u8>,
     pub value: Option<Vec<u8>>,
+}
+
+impl Record {
+    pub fn new(key: Vec<u8>, value: Option<Vec<u8>>) -> Self {
+        Self { key, value }
+    }
 }
 impl Message for Record {}
 

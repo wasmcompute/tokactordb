@@ -13,16 +13,22 @@ use tokio::{sync::RwLock, task::JoinSet};
 use self::list::ListStream;
 
 use super::{
+    db::TreeVersion,
     subtree::{SubTreeRestorer, SubTreeSubscriber},
     wal::Wal,
     GenericTree,
 };
 
-pub fn tree_actor<A>(name: String, wal: Wal, ctx: &mut Ctx<A>) -> ActorRef<TreeActor>
+pub fn tree_actor<A>(
+    name: String,
+    versions: Vec<TreeVersion>,
+    wal: Wal,
+    ctx: &mut Ctx<A>,
+) -> ActorRef<TreeActor>
 where
     A: Actor + Handler<DeadActorResult<TreeActor>>,
 {
-    let tree = TreeActor::new(name, wal);
+    let tree = TreeActor::new(name, versions, wal);
     ctx.spawn(tree)
 }
 
@@ -141,18 +147,13 @@ where
     pub async fn get(&self, key: impl Into<Key>) -> anyhow::Result<Option<Value>> {
         let key = key.into();
         let bin = bincode::serialize(&key).unwrap();
-        let msg = GetRecord::new(bin);
+        let msg = GetRecord::<Key, Value>::new(bin);
         let response = self.inner.async_ask(msg).await.unwrap();
-        if let Some(value) = response.value {
-            let value = serde_json::from_slice(&value).unwrap();
-            Ok(Some(value))
-        } else {
-            Ok(None)
-        }
+        Ok(response.value)
     }
 
     pub(crate) async fn get_mem_table_snapshot(&self) -> anyhow::Result<Vec<Record>> {
-        let result = self.inner.ask(GetMemTableSnapshot).await.unwrap();
+        let result = self.inner.async_ask(GetMemTableSnapshot).await.unwrap();
         Ok(result.list)
     }
 
@@ -165,7 +166,7 @@ where
     }
 
     async fn get_head_or_tail(&self, end: ListEnd) -> anyhow::Result<Option<(Key, Option<Value>)>> {
-        let result = self.inner.ask(end).await.unwrap();
+        let result = self.inner.async_ask(end).await.unwrap();
         if let Some(option) = result.option {
             Ok(Some(record_bin_to_value(&option)))
         } else {
@@ -184,10 +185,6 @@ where
 
     pub async fn register_restorer(&self, restorer: SubTreeRestorer) {
         self.inner.send_async(restorer).await.unwrap();
-    }
-
-    pub(crate) fn as_generic(&self) -> GenericTree {
-        GenericTree::new(self.inner.clone())
     }
 
     pub(crate) fn duplicate(&self) -> Self {

@@ -45,7 +45,7 @@ impl Ask<NewTreeRoot> for DbActor {
     type Result = TreeRoot;
 
     fn handle(&mut self, message: NewTreeRoot, context: &mut am::Ctx<Self>) -> Self::Result {
-        let address = tree_actor(message.name.clone(), self.wal(), context);
+        let address = tree_actor(message.name.clone(), message.versions, self.wal(), context);
         self.trees
             .insert(message.name, GenericTree::new(address.clone()));
         TreeRoot::new(address)

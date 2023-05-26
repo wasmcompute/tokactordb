@@ -35,9 +35,15 @@ where
 }
 
 impl Wal {
-    pub async fn write(&self, table: String, key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<()> {
+    pub async fn write(
+        &self,
+        table: String,
+        version: u16,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
-        let item = Item::new(table, key, Some(value));
+        let item = Item::new(table, version, key, Some(value));
         let insert = Insert::new(tx, item);
 
         if (self.inner.send_async(insert).await).is_err() {

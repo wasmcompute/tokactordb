@@ -8,15 +8,9 @@ use conventually::{
     Aggregate, AggregateTree, Change, Database, SubTree, Tree, Update, ID, U32, U64,
 };
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Board {
     name: String,
-}
-
-impl Board {
-    pub fn new(name: String) -> Self {
-        Self { name }
-    }
 }
 
 impl std::fmt::Display for Board {
@@ -25,7 +19,32 @@ impl std::fmt::Display for Board {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct BoardV2 {
+    name: String,
+    name_len: usize,
+}
+
+impl BoardV2 {
+    pub fn new(name: String) -> Self {
+        let name_len: usize = name.len();
+        Self { name, name_len }
+    }
+}
+
+impl From<Board> for BoardV2 {
+    fn from(value: Board) -> Self {
+        Self::new(value.name)
+    }
+}
+
+impl std::fmt::Display for BoardV2 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.len() == {}", self.name, self.name_len)
+    }
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Ticket {
     board: ID<U32, Board>,
     name: String,
@@ -168,7 +187,7 @@ impl<'a> Cli<'a> {
 
 async fn board<'a>(
     cli: &mut Cli<'a>,
-    board_store: &Tree<U32, Board>,
+    board_store: &Tree<U32, BoardV2>,
 ) -> anyhow::Result<Option<ID<U32, Board>>> {
     cli.write("Choose a board!")?;
     loop {
@@ -177,7 +196,7 @@ async fn board<'a>(
         match cmd.as_str() {
             "create" => {
                 let name = cli.read_line("Name > ")?;
-                board_store.insert(Board::new(name)).await?;
+                board_store.insert(BoardV2::new(name)).await?;
             }
             "list" => {
                 let mut list = board_store.list().await;
@@ -278,9 +297,12 @@ async fn tickets<'a>(
 async fn run() -> anyhow::Result<()> {
     let mut cli = Cli::new();
     let mut db = Database::new();
-    // let mut db = Database::restore(".db/wal")?;
-    let board_store = db.create::<U32, Board>("Boards").await?;
-    let ticket_store = db.create::<U64, Ticket>("Tickets").await?;
+    let board_store = db
+        .create::<U32, Board>("Boards")?
+        .migrate::<U32, BoardV2>()?
+        .unwrap()
+        .await?;
+    let ticket_store = db.create::<U64, Ticket>("Tickets")?.unwrap().await?;
     let board_tickets = db
         .create_index("Board Ticket Index", &ticket_store, |value| {
             Some(&value.board)
