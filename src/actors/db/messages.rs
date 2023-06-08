@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use am::{ActorRef, Message};
+use tokactor::{ActorRef, Message};
 
 use crate::actors::{tree::TreeActor, wal::Item};
 

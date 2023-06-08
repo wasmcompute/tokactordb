@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use am::{Actor, Ask, AsyncAsk, AsyncHandle, DeadActorResult, Handler};
+use tokactor::{Actor, Ask, AsyncAsk, AsyncHandle, Ctx, DeadActorResult, Handler};
 
 use crate::actors::{
     tree::{tree_actor, TreeActor},
@@ -32,7 +32,7 @@ impl DbActor {
 }
 
 impl Actor for DbActor {
-    fn on_start(&mut self, ctx: &mut am::Ctx<Self>)
+    fn on_start(&mut self, ctx: &mut Ctx<Self>)
     where
         Self: Actor,
     {
@@ -44,7 +44,7 @@ impl Actor for DbActor {
 impl Ask<NewTreeRoot> for DbActor {
     type Result = TreeRoot;
 
-    fn handle(&mut self, message: NewTreeRoot, context: &mut am::Ctx<Self>) -> Self::Result {
+    fn handle(&mut self, message: NewTreeRoot, context: &mut Ctx<Self>) -> Self::Result {
         let address = tree_actor(message.name.clone(), message.versions, self.wal(), context);
         self.trees
             .insert(message.name, GenericTree::new(address.clone()));
@@ -55,7 +55,7 @@ impl Ask<NewTreeRoot> for DbActor {
 impl AsyncAsk<Restore> for DbActor {
     type Result = WalRestoredItems;
 
-    fn handle(&mut self, msg: Restore, ctx: &mut am::Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle(&mut self, msg: Restore, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
         // The restore message given to us here is a directory. In the future we'd
         // want to do some advanced logic here such as like  get metadata files
         // and read all of the WAL logs that are avaliable to us.
@@ -78,7 +78,7 @@ impl AsyncAsk<Restore> for DbActor {
 impl AsyncAsk<RestoreComplete> for DbActor {
     type Result = ();
 
-    fn handle(&mut self, _: RestoreComplete, ctx: &mut am::Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle(&mut self, _: RestoreComplete, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
         let trees = self.trees.values().map(Clone::clone).collect::<Vec<_>>();
         ctx.anonymous_handle(async move {
             for tree in trees {
@@ -91,7 +91,7 @@ impl AsyncAsk<RestoreComplete> for DbActor {
 impl AsyncAsk<RestoreItem> for DbActor {
     type Result = ();
 
-    fn handle(&mut self, msg: RestoreItem, ctx: &mut am::Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle(&mut self, msg: RestoreItem, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
         if let Some(tree) = self.trees.get(&msg.table) {
             let tree_addr = tree.clone();
             ctx.anonymous_handle(async move {
@@ -106,7 +106,7 @@ impl AsyncAsk<RestoreItem> for DbActor {
 impl Ask<()> for DbActor {
     type Result = Wal;
 
-    fn handle(&mut self, _: (), _: &mut am::Ctx<Self>) -> Self::Result {
+    fn handle(&mut self, _: (), _: &mut Ctx<Self>) -> Self::Result {
         self.wal()
     }
 }
@@ -117,13 +117,13 @@ impl Ask<()> for DbActor {
  * - Wal (Write Ahead Log) Actor
  */
 impl Handler<DeadActorResult<TreeActor>> for DbActor {
-    fn handle(&mut self, _: DeadActorResult<TreeActor>, _: &mut am::Ctx<Self>) {
+    fn handle(&mut self, _: DeadActorResult<TreeActor>, _: &mut Ctx<Self>) {
         todo!()
     }
 }
 
 impl Handler<DeadActorResult<WalActor>> for DbActor {
-    fn handle(&mut self, _: DeadActorResult<WalActor>, _: &mut am::Ctx<Self>) {
+    fn handle(&mut self, _: DeadActorResult<WalActor>, _: &mut Ctx<Self>) {
         todo!()
     }
 }

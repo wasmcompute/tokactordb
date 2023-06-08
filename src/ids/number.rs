@@ -40,7 +40,7 @@ macro_rules! auto_increment_id_number_impl {
             }
         }
 
-        impl am::Message for $id {}
+        impl tokactor::Message for $id {}
 
         impl std::fmt::Display for $id {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

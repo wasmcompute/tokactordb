@@ -6,8 +6,8 @@ mod messages;
 use std::sync::Arc;
 
 pub use actor::*;
-use am::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
 pub use messages::*;
+use tokactor::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
 use tokio::{sync::RwLock, task::JoinSet};
 
 use self::list::ListStream;

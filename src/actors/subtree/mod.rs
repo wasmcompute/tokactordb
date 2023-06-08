@@ -3,7 +3,7 @@ mod index;
 
 use std::sync::Arc;
 
-use am::Message;
+use tokactor::Message;
 use tokio::sync::mpsc;
 
 pub use aggregate::AggregateTreeActor;

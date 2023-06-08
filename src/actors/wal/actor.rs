@@ -3,8 +3,8 @@ use std::{
     time::Duration,
 };
 
-use am::{Actor, AnonymousRef, Ask, Ctx, Handler};
 use anyhow::Error;
+use tokactor::{Actor, AnonymousRef, Ask, Ctx, Handler};
 use tokio::{sync::oneshot, time::Instant};
 
 use crate::{
@@ -79,8 +79,8 @@ impl Actor for WalActor {
         100
     }
 
-    fn scheduler() -> am::Scheduler {
-        am::Scheduler::NonBlocking
+    fn scheduler() -> tokactor::Scheduler {
+        tokactor::Scheduler::NonBlocking
     }
 
     fn on_stopping(&mut self, ctx: &mut Ctx<Self>) {
@@ -94,7 +94,7 @@ impl Actor for WalActor {
 }
 
 impl Handler<Insert> for WalActor {
-    fn handle(&mut self, message: Insert, ctx: &mut am::Ctx<Self>) {
+    fn handle(&mut self, message: Insert, ctx: &mut tokactor::Ctx<Self>) {
         println!("Pushed Message...");
         self.buffer.push(message);
 
@@ -112,7 +112,7 @@ impl Handler<Insert> for WalActor {
 }
 
 impl Handler<Flush> for WalActor {
-    fn handle(&mut self, _: Flush, context: &mut am::Ctx<Self>) {
+    fn handle(&mut self, _: Flush, context: &mut tokactor::Ctx<Self>) {
         assert!(self.flush.is_some());
         let flush = self.flush.take().unwrap();
         let (is_error, notifiers) = self.flush(flush);

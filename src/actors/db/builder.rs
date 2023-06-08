@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use am::ActorRef;
+use tokactor::ActorRef;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{

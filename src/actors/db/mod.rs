@@ -5,7 +5,7 @@ mod version;
 
 use std::path::Path;
 
-use am::{Actor, ActorRef};
+use tokactor::{Actor, ActorRef};
 
 use actor::DbActor;
 pub use builder::TreeVersion;

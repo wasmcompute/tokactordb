@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use am::{Actor, Ask, AsyncAsk, AsyncHandle, Handler};
+use tokactor::{Actor, Ask, AsyncAsk, AsyncHandle, Ctx, Handler};
 
 use crate::actors::{
     db::{RestoreComplete, RestoreItem, TreeVersion},
@@ -88,7 +88,7 @@ impl Actor for TreeActor {}
 impl<Key: PrimaryKey> Ask<GetUniqueKey<Key>> for TreeActor {
     type Result = UniqueKey<Key>;
 
-    fn handle(&mut self, _: GetUniqueKey<Key>, _: &mut am::Ctx<Self>) -> Self::Result {
+    fn handle(&mut self, _: GetUniqueKey<Key>, _: &mut Ctx<Self>) -> Self::Result {
         UniqueKey(self.get_unique_id())
     }
 }
@@ -99,11 +99,7 @@ where
 {
     type Result = InsertSuccess<Key>;
 
-    fn handle(
-        &mut self,
-        msg: InsertRecord<Key>,
-        ctx: &mut am::Ctx<Self>,
-    ) -> AsyncHandle<Self::Result> {
+    fn handle(&mut self, msg: InsertRecord<Key>, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
         let key = if let Some(max) = self.max.as_ref() {
             let mut key: Key = bincode::deserialize(max).unwrap();
             key.increment()
@@ -146,7 +142,7 @@ where
 impl AsyncAsk<UpdateRecord> for TreeActor {
     type Result = ();
 
-    fn handle(&mut self, msg: UpdateRecord, ctx: &mut am::Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle(&mut self, msg: UpdateRecord, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
         let wal = self.wal.clone();
         let table = self.name.clone();
         self.memtable
@@ -170,7 +166,7 @@ impl<Key: PrimaryKey, Value: RecordValue> AsyncAsk<GetRecord<Key, Value>> for Tr
     fn handle(
         &mut self,
         msg: GetRecord<Key, Value>,
-        ctx: &mut am::Ctx<Self>,
+        ctx: &mut Ctx<Self>,
     ) -> AsyncHandle<Self::Result> {
         let option = self.memtable.get(&msg.key);
         if option.is_none() {
@@ -208,7 +204,7 @@ impl<Key: PrimaryKey, Value: RecordValue> AsyncAsk<GetRecord<Key, Value>> for Tr
 impl AsyncAsk<ListEnd> for TreeActor {
     type Result = ListEndResult;
 
-    fn handle(&mut self, msg: ListEnd, ctx: &mut am::Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle(&mut self, msg: ListEnd, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
         let option = match msg {
             ListEnd::Head => self.memtable.get_first(),
             ListEnd::Tail => self.memtable.get_last(),
@@ -247,11 +243,7 @@ impl AsyncAsk<ListEnd> for TreeActor {
 impl AsyncAsk<GetMemTableSnapshot> for TreeActor {
     type Result = Snapshot;
 
-    fn handle(
-        &mut self,
-        _: GetMemTableSnapshot,
-        ctx: &mut am::Ctx<Self>,
-    ) -> AsyncHandle<Self::Result> {
+    fn handle(&mut self, _: GetMemTableSnapshot, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
         let max = self.version;
         let addr = ctx.address();
         let versions = self.versions.clone();
@@ -282,7 +274,7 @@ impl AsyncAsk<GetMemTableSnapshot> for TreeActor {
 }
 
 impl Handler<RestoreItem> for TreeActor {
-    fn handle(&mut self, item: RestoreItem, ctx: &mut am::Ctx<Self>) {
+    fn handle(&mut self, item: RestoreItem, ctx: &mut Ctx<Self>) {
         let key = item.0.key;
         let value = item.0.value;
         let version = item.0.version;
@@ -303,7 +295,7 @@ impl Handler<RestoreItem> for TreeActor {
 impl Ask<RestoreComplete> for TreeActor {
     type Result = ();
 
-    fn handle(&mut self, _: RestoreComplete, _: &mut am::Ctx<Self>) -> Self::Result {
+    fn handle(&mut self, _: RestoreComplete, _: &mut Ctx<Self>) -> Self::Result {
         // Basically just take all of the subtrees messages. When this happen, the subtree
         // will stop restoring messages and move into a ready state.
         let _ = self.sub_trees.take();
@@ -312,7 +304,7 @@ impl Ask<RestoreComplete> for TreeActor {
 }
 
 impl Handler<SubTreeRestorer> for TreeActor {
-    fn handle(&mut self, sub_tree: SubTreeRestorer, _: &mut am::Ctx<Self>) {
+    fn handle(&mut self, sub_tree: SubTreeRestorer, _: &mut Ctx<Self>) {
         let mut list = self.sub_trees.take().unwrap_or(vec![]);
         list.push(sub_tree);
         self.sub_trees = Some(list);

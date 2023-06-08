@@ -1,4 +1,4 @@
-use am::ActorRef;
+use tokactor::ActorRef;
 
 use self::{
     db::{RestoreComplete, RestoreItem},

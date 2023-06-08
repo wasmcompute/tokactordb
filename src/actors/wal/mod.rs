@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use am::{Actor, ActorRef, Ctx, DeadActorResult, Handler, Message};
+use tokactor::{Actor, ActorRef, Ctx, DeadActorResult, Handler, Message};
 use tokio::sync::oneshot;
 
 use self::messages::{DumpWal, WalRestore};

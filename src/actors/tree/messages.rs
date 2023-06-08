@@ -1,7 +1,7 @@
 use std::{any::Any, marker::PhantomData};
 
-use am::Message;
 use serde::{de::DeserializeOwned, Serialize};
+use tokactor::Message;
 
 use crate::AutoIncrement;
 
