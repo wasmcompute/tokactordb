@@ -3,7 +3,6 @@ mod index;
 
 use std::sync::Arc;
 
-use tokactor::Message;
 use tokio::sync::mpsc;
 
 pub use aggregate::AggregateTreeActor;
@@ -20,7 +19,6 @@ type SubTreeRestorerSender = mpsc::Sender<(Arc<Vec<u8>>, Arc<Option<Vec<u8>>>)>;
 pub struct SubTreeRestorer {
     inner: SubTreeRestorerSender,
 }
-impl Message for SubTreeRestorer {}
 
 impl SubTreeRestorer {
     pub fn new(inner: SubTreeRestorerSender) -> Self {

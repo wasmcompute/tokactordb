@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use tokactor::{ActorRef, Message};
+use tokactor::ActorRef;
 
 use crate::actors::{tree::TreeActor, wal::Item};
 
@@ -20,13 +20,11 @@ impl NewTreeRoot {
         Self { name, versions }
     }
 }
-impl Message for NewTreeRoot {}
 
 #[derive(Debug)]
 pub struct TreeRoot {
     pub inner: ActorRef<TreeActor>,
 }
-impl Message for TreeRoot {}
 
 impl TreeRoot {
     pub fn new(inner: ActorRef<TreeActor>) -> Self {
@@ -44,11 +42,9 @@ impl Restore {
         Self { directory }
     }
 }
-impl Message for Restore {}
 
 #[derive(Debug)]
 pub struct RestoreItem(pub Item);
-impl Message for RestoreItem {}
 impl Deref for RestoreItem {
     type Target = Item;
 
@@ -64,4 +60,3 @@ impl DerefMut for RestoreItem {
 
 #[derive(Debug)]
 pub struct RestoreComplete;
-impl Message for RestoreComplete {}

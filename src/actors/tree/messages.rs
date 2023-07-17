@@ -1,7 +1,6 @@
 use std::{any::Any, marker::PhantomData};
 
 use serde::{de::DeserializeOwned, Serialize};
-use tokactor::Message;
 
 use crate::AutoIncrement;
 
@@ -36,8 +35,6 @@ pub struct InsertRecord<Key: PrimaryKey> {
     pub value: Vec<u8>,
 }
 
-impl<Key: PrimaryKey> Message for InsertRecord<Key> {}
-
 impl<Key: PrimaryKey> InsertRecord<Key> {
     pub fn new(value: Vec<u8>) -> Self {
         Self {
@@ -57,8 +54,6 @@ impl<Key: PrimaryKey> InsertSuccess<Key> {
     }
 }
 
-impl<Key: PrimaryKey> Message for InsertSuccess<Key> {}
-
 #[derive(Debug)]
 pub struct UpdateRecord {
     pub key: Vec<u8>,
@@ -70,7 +65,6 @@ impl UpdateRecord {
         Self { key, value }
     }
 }
-impl Message for UpdateRecord {}
 
 #[derive(Debug)]
 pub struct GetRecord<Key: PrimaryKey, Value: RecordValue> {
@@ -88,7 +82,6 @@ impl<Key: PrimaryKey, Value: RecordValue> GetRecord<Key, Value> {
         }
     }
 }
-impl<Key: PrimaryKey, Value: RecordValue> Message for GetRecord<Key, Value> {}
 
 pub struct GetRecordResult<Value: RecordValue> {
     pub value: Option<Value>,
@@ -99,14 +92,12 @@ impl<Value: RecordValue> GetRecordResult<Value> {
         Self { value }
     }
 }
-impl<Value: RecordValue> Message for GetRecordResult<Value> {}
 
 #[derive(Debug)]
 pub enum ListEnd {
     Head,
     Tail,
 }
-impl Message for ListEnd {}
 
 #[derive(Debug)]
 pub struct ListEndResult {
@@ -131,7 +122,6 @@ impl ListEndResult {
         }
     }
 }
-impl Message for ListEndResult {}
 
 #[derive(Debug)]
 pub struct Record {
@@ -144,22 +134,19 @@ impl Record {
         Self { key, value }
     }
 }
-impl Message for Record {}
+impl Record {}
 
 #[derive(Debug)]
 pub struct GetMemTableSnapshot;
-impl Message for GetMemTableSnapshot {}
 
 pub struct Snapshot {
     pub list: Vec<Record>,
 }
-impl Message for Snapshot {}
 
 #[derive(Debug)]
 pub struct AddGenericTree {
     pub inner: GenericTree,
 }
-impl Message for AddGenericTree {}
 
 #[derive(Debug)]
 pub struct GetUniqueKey<Key: PrimaryKey>(PhantomData<Key>);
@@ -168,8 +155,6 @@ impl<Key: PrimaryKey> Default for GetUniqueKey<Key> {
         Self(PhantomData)
     }
 }
-impl<Key: PrimaryKey> Message for GetUniqueKey<Key> {}
 
 #[derive(Debug)]
 pub struct UniqueKey<Key: PrimaryKey>(pub Key);
-impl<Key: PrimaryKey> Message for UniqueKey<Key> {}

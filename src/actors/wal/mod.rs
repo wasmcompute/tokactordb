@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use tokactor::{Actor, ActorRef, Ctx, DeadActorResult, Handler, Message};
+use tokactor::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
 use tokio::sync::oneshot;
 
 use self::messages::{DumpWal, WalRestore};
@@ -15,14 +15,12 @@ use crate::disk::Disk;
 
 pub use self::item::Item;
 pub use actor::WalActor;
-pub use messages::{Insert, Rx, WalRestoredItems};
+pub use messages::{Insert, WalRestoredItems};
 
 #[derive(Clone)]
 pub struct Wal {
     inner: ActorRef<WalActor>,
 }
-
-impl Message for Wal {}
 
 pub fn new_wal_actor<A>(ctx: &mut Ctx<A>, flush_buffer_sync: Duration) -> Wal
 where
