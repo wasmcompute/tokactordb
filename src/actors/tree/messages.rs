@@ -4,8 +4,6 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::AutoIncrement;
 
-use super::GenericTree;
-
 pub trait PrimaryKey:
     Serialize
     + DeserializeOwned
@@ -83,44 +81,10 @@ impl<Key: PrimaryKey, Value: RecordValue> GetRecord<Key, Value> {
     }
 }
 
-pub struct GetRecordResult<Value: RecordValue> {
-    pub value: Option<Value>,
-}
-
-impl<Value: RecordValue> GetRecordResult<Value> {
-    pub fn new(value: Option<Value>) -> Self {
-        Self { value }
-    }
-}
-
 #[derive(Debug)]
 pub enum ListEnd {
     Head,
     Tail,
-}
-
-#[derive(Debug)]
-pub struct ListEndResult {
-    pub option: Option<Record>,
-}
-
-impl ListEndResult {
-    pub fn none() -> Self {
-        Self { option: None }
-    }
-    pub fn key(key: Vec<u8>) -> Self {
-        Self {
-            option: Some(Record { key, value: None }),
-        }
-    }
-    pub fn new(key: Vec<u8>, value: Vec<u8>) -> Self {
-        Self {
-            option: Some(Record {
-                key,
-                value: Some(value),
-            }),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -138,15 +102,6 @@ impl Record {}
 
 #[derive(Debug)]
 pub struct GetMemTableSnapshot;
-
-pub struct Snapshot {
-    pub list: Vec<Record>,
-}
-
-#[derive(Debug)]
-pub struct AddGenericTree {
-    pub inner: GenericTree,
-}
 
 #[derive(Debug)]
 pub struct GetUniqueKey<Key: PrimaryKey>(PhantomData<Key>);

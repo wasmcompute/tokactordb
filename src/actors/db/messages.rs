@@ -3,9 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use tokactor::ActorRef;
-
-use crate::actors::{tree::TreeActor, wal::Item};
+use crate::actors::wal::Item;
 
 use super::builder::TreeVersion;
 
@@ -21,17 +19,6 @@ pub struct NewTreeRoot {
 impl NewTreeRoot {
     pub fn new(name: String, versions: Vec<TreeVersion>) -> Self {
         Self { name, versions }
-    }
-}
-
-#[derive(Debug)]
-pub struct TreeRoot {
-    pub inner: ActorRef<TreeActor>,
-}
-
-impl TreeRoot {
-    pub fn new(inner: ActorRef<TreeActor>) -> Self {
-        Self { inner }
     }
 }
 

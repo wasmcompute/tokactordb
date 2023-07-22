@@ -9,9 +9,8 @@ use crate::actors::{
 };
 
 use super::{
-    memtable::MemTable, GetMemTableSnapshot, GetRecord, GetRecordResult, GetUniqueKey,
-    InsertRecord, InsertSuccess, ListEnd, ListEndResult, PrimaryKey, Record, RecordValue, Snapshot,
-    UniqueKey, UpdateRecord,
+    memtable::MemTable, GetMemTableSnapshot, GetRecord, GetUniqueKey, InsertRecord, InsertSuccess,
+    ListEnd, PrimaryKey, Record, RecordValue, UniqueKey, UpdateRecord,
 };
 
 pub struct TreeActor {
@@ -24,6 +23,8 @@ pub struct TreeActor {
     sub_trees: Option<Vec<SubTreeRestorer>>,
     write_enabled: bool,
 }
+
+impl Actor for TreeActor {}
 
 impl TreeActor {
     pub fn new(name: String, versions: Vec<TreeVersion>, wal: Wal) -> Self {
@@ -66,24 +67,21 @@ impl TreeActor {
     }
 
     pub async fn upgrade(
-        versions: &[TreeVersion],
-        max: u16,
+        &self,
         mut key: Vec<u8>,
         mut data: Vec<u8>,
         mut version: u16,
-    ) -> (Vec<u8>, Vec<u8>) {
-        while version != max {
-            let tree_version = versions.get(version as usize).unwrap();
-            let (k, v) = tree_version.upgrade(key, data).await;
+    ) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+        while version != self.version {
+            let tree_version = self.versions.get(version as usize).unwrap();
+            let (k, v) = tree_version.upgrade(key, data).await?;
             key = k;
             data = v;
             version += 1;
         }
-        (key, data)
+        Ok((key, data))
     }
 }
-
-impl Actor for TreeActor {}
 
 impl<Key: PrimaryKey> Ask<GetUniqueKey<Key>> for TreeActor {
     type Result = UniqueKey<Key>;
@@ -163,7 +161,7 @@ impl AsyncAsk<UpdateRecord> for TreeActor {
 }
 
 impl<Key: PrimaryKey, Value: RecordValue> AsyncAsk<GetRecord<Key, Value>> for TreeActor {
-    type Output = GetRecordResult<Value>;
+    type Output = anyhow::Result<Option<Value>>;
     type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
     fn handle<'a>(
@@ -173,39 +171,30 @@ impl<Key: PrimaryKey, Value: RecordValue> AsyncAsk<GetRecord<Key, Value>> for Tr
     ) -> Self::Future<'a> {
         let option = self.memtable.get(&msg.key);
         if option.is_none() {
-            return Box::pin(async move { GetRecordResult::new(None) });
+            return Box::pin(async move { Ok(None) });
         }
         let record = option.unwrap();
         if record.version == self.version {
-            Box::pin(async move {
-                GetRecordResult::new(Some(serde_json::from_slice(&record.data).unwrap()))
-            })
+            Box::pin(async move { Ok(Some(serde_json::from_slice(&record.data).unwrap())) })
         } else {
             // We need to send the version tree actors a message to update the messages
             // that are being retrieved.
-            let versions = self.versions.clone();
-            let max_version = self.version;
-            let key = msg.key;
             let addr = ctx.address();
             Box::pin(async move {
                 // 1. Upgrade value to latest version
-                let (key, value) =
-                    Self::upgrade(&versions, max_version, key, record.data, record.version).await;
+                let (key, value) = self.upgrade(msg.key, record.data, record.version).await?;
                 // 2. Update record to reflect latest version
                 addr.async_ask(UpdateRecord::new(key.clone(), value))
-                    .await
-                    .unwrap();
+                    .await?;
                 // 3. Get the newly updated record
-                addr.async_ask(GetRecord::<Key, Value>::new(key))
-                    .await
-                    .unwrap()
+                addr.async_ask(GetRecord::<Key, Value>::new(key)).await?
             })
         }
     }
 }
 
 impl AsyncAsk<ListEnd> for TreeActor {
-    type Output = ListEndResult;
+    type Output = anyhow::Result<Option<Record>>;
     type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
     fn handle<'a>(&'a mut self, msg: ListEnd, ctx: &mut Ctx<Self>) -> Self::Future<'a> {
@@ -213,56 +202,50 @@ impl AsyncAsk<ListEnd> for TreeActor {
             ListEnd::Head => self.memtable.get_first(),
             ListEnd::Tail => self.memtable.get_last(),
         };
-        if let Some((key, opt)) = option {
-            if let Some(value) = opt {
-                // println!("{} == {}", self.version, value.version);
-                if self.version == value.version {
-                    Box::pin(async move { ListEndResult::new(key, value.data) })
-                } else {
-                    let versions = self.versions.clone();
-                    let max_version = self.version;
-                    let addr = ctx.address();
-                    Box::pin(async move {
-                        println!("Upgrading");
-                        let (key, value) =
-                            Self::upgrade(&versions, max_version, key, value.data, value.version)
-                                .await;
-                        // 2. Update record to reflect latest version
-                        addr.async_ask(UpdateRecord::new(key.clone(), value))
-                            .await
-                            .unwrap();
-                        // 3. Return the result
-                        addr.async_ask(msg).await.unwrap()
-                    })
-                }
-            } else {
-                Box::pin(async move { ListEndResult::key(key) })
-            }
+        if option.is_none() {
+            return Box::pin(async { Ok(None) });
+        }
+        let (key, value_opt) = option.unwrap();
+        if value_opt.is_none() {
+            return Box::pin(async move { Ok(Some(Record::new(key, None))) });
+        }
+        let value = value_opt.unwrap();
+        if self.version == value.version {
+            Box::pin(async move { Ok(Some(Record::new(key, Some(value.data)))) })
         } else {
-            Box::pin(async { ListEndResult::none() })
+            println!("{} != {}", self.version, value.version);
+            let addr = ctx.address();
+            Box::pin(async move {
+                println!("Upgrading");
+                let (key, value) = self.upgrade(key, value.data, value.version).await?;
+                // 2. Update record to reflect latest version
+                addr.async_ask(UpdateRecord::new(key.clone(), value))
+                    .await?;
+                // 3. Return the result
+                addr.async_ask(msg).await?
+            })
         }
     }
 }
 
 impl AsyncAsk<GetMemTableSnapshot> for TreeActor {
-    type Output = Snapshot;
+    type Output = anyhow::Result<Vec<Record>>;
     type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
     fn handle<'a>(&'a mut self, _: GetMemTableSnapshot, ctx: &mut Ctx<Self>) -> Self::Future<'a> {
-        let max = self.version;
         let addr = ctx.address();
-        let versions = self.versions.clone();
-        let snapshot = self.memtable.as_sorted_vec();
+        // let max = self.version;
+        // let versions = self.versions.clone();
+        // let snapshot = self.memtable.as_sorted_vec();
         Box::pin(async move {
-            let mut list = Vec::with_capacity(snapshot.len());
-            for (key, value) in snapshot {
+            let mut list = Vec::with_capacity(self.memtable.len());
+            for (key, value) in self.memtable.as_iter() {
+                let key = key.clone();
                 if let Some(mem) = value {
-                    println!("{} == {}", max, mem.version);
-                    if max == mem.version {
-                        list.push(Record::new(key, Some(mem.data)))
+                    if self.version == mem.version {
+                        list.push(Record::new(key, Some(mem.data.clone())))
                     } else {
-                        let (key, value) =
-                            Self::upgrade(&versions, max, key, mem.data, mem.version).await;
+                        let (key, value) = self.upgrade(key, mem.data.clone(), mem.version).await?;
                         // 2. Update record to reflect latest version
                         addr.async_ask(UpdateRecord::new(key.clone(), value.clone()))
                             .await
@@ -273,7 +256,7 @@ impl AsyncAsk<GetMemTableSnapshot> for TreeActor {
                     list.push(Record::new(key, None));
                 }
             }
-            Snapshot { list }
+            Ok(list)
         })
     }
 }

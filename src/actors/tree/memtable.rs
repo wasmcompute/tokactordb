@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{btree_map::Iter, BTreeMap};
 
 #[derive(Debug, Clone)]
 pub struct MemRecord {
@@ -52,11 +52,12 @@ impl MemTable {
             .map(|(k, v)| (k.clone(), v.clone()))
     }
 
-    pub fn as_sorted_vec(&self) -> Vec<(Vec<u8>, Option<MemRecord>)> {
-        self.map
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+    pub fn as_iter(&self) -> Iter<'_, Vec<u8>, Option<MemRecord>> {
+        self.map.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
     }
 
     pub fn is_empty(&self) -> bool {

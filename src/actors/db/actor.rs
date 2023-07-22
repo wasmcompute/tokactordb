@@ -1,25 +1,27 @@
 use std::{collections::HashMap, future::Future, pin::Pin, time::Duration};
 
-use tokactor::{Actor, Ask, AsyncAsk, Ctx, DeadActorResult, Handler};
+use tokactor::{
+    util::builder::ActorAskRef, Actor, ActorRef, Ask, AsyncAsk, Ctx, DeadActorResult, Handler,
+};
 
 use crate::{
     actors::{
         subtree::{AggregateTreeActor, IndexTreeActor, UtilTreeAddress},
         tree::{tree_actor, PrimaryKey, RecordValue, TreeActor},
         wal::{new_wal_actor, Wal, WalActor, WalRestoredItems},
-        GenericTree,
     },
     Aggregate, AggregateTree, SubTree,
 };
 
 use super::{
-    messages::{NewTreeRoot, Restore, RestoreItem, TreeRoot},
+    messages::{NewTreeRoot, Restore, RestoreItem},
+    version::{UpgradeVersion, UpgradedVersion, VersionedTreeUpgradeActor},
     RequestWal, RestoreComplete,
 };
 
 pub struct DbActor {
     wal: Option<Wal>,
-    trees: HashMap<String, GenericTree>,
+    trees: HashMap<String, ActorRef<TreeActor>>,
 }
 
 impl DbActor {
@@ -46,13 +48,12 @@ impl Actor for DbActor {
 }
 
 impl Ask<NewTreeRoot> for DbActor {
-    type Result = TreeRoot;
+    type Result = ActorRef<TreeActor>;
 
     fn handle(&mut self, message: NewTreeRoot, context: &mut Ctx<Self>) -> Self::Result {
         let address = tree_actor(message.name.clone(), message.versions, self.wal(), context);
-        self.trees
-            .insert(message.name, GenericTree::new(address.clone()));
-        TreeRoot::new(address)
+        self.trees.insert(message.name, address.clone());
+        address
     }
 }
 
@@ -81,32 +82,37 @@ impl AsyncAsk<Restore> for DbActor {
 }
 
 impl AsyncAsk<RestoreComplete> for DbActor {
-    type Output = ();
+    type Output = anyhow::Result<()>;
     type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
     fn handle<'a>(&'a mut self, _: RestoreComplete, _: &mut Ctx<Self>) -> Self::Future<'a> {
         Box::pin(async move {
             let mut fut = Vec::with_capacity(self.trees.len());
             for tree in self.trees.values() {
-                fut.push(tree.send_restore_complete());
+                fut.push(tree.ask(RestoreComplete));
             }
-            futures::future::join_all(fut).await;
+            let results = futures::future::join_all(fut).await;
+            for result in results {
+                // return an error if it was encountered
+                // TODO(Alec): We probably want to clean this up a little bit
+                result?;
+            }
+            Ok(())
         })
     }
 }
 
 impl AsyncAsk<RestoreItem> for DbActor {
-    type Output = ();
+    type Output = anyhow::Result<()>;
     type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
     fn handle<'a>(&'a mut self, msg: RestoreItem, _: &mut Ctx<Self>) -> Self::Future<'a> {
-        if let Some(tree) = self.trees.get(&msg.table) {
-            Box::pin(async move {
-                tree.send_generic_item(msg).await;
-            })
-        } else {
-            Box::pin(async move {})
-        }
+        Box::pin(async move {
+            if let Some(tree) = self.trees.get(&msg.table) {
+                tree.send_async(msg).await?;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -153,6 +159,24 @@ impl<
     }
 }
 
+impl<Pk, Pv, Ck, Cv> Ask<VersionedTreeUpgradeActor<Pk, Pv, Ck, Cv>> for DbActor
+where
+    Pk: PrimaryKey,
+    Pv: RecordValue,
+    Ck: PrimaryKey + From<Pk>,
+    Cv: RecordValue + From<Pv>,
+{
+    type Result = ActorAskRef<UpgradeVersion, UpgradedVersion>;
+
+    fn handle(
+        &mut self,
+        actor: VersionedTreeUpgradeActor<Pk, Pv, Ck, Cv>,
+        ctx: &mut Ctx<Self>,
+    ) -> Self::Result {
+        actor.spawn_with_ctx(ctx)
+    }
+}
+
 /*******************************************************************************
  * Handle the death of child actors
  * - TreeActor
@@ -194,6 +218,22 @@ impl<
     fn handle(
         &mut self,
         _: DeadActorResult<AggregateTreeActor<ID, Record, Key, Value>>,
+        _: &mut Ctx<Self>,
+    ) {
+        todo!()
+    }
+}
+
+impl<Pk, Pv, Ck, Cv> Handler<DeadActorResult<VersionedTreeUpgradeActor<Pk, Pv, Ck, Cv>>> for DbActor
+where
+    Pk: PrimaryKey,
+    Pv: RecordValue,
+    Ck: PrimaryKey + From<Pk>,
+    Cv: RecordValue + From<Pv>,
+{
+    fn handle(
+        &mut self,
+        _: DeadActorResult<VersionedTreeUpgradeActor<Pk, Pv, Ck, Cv>>,
         _: &mut Ctx<Self>,
     ) {
         todo!()

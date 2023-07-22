@@ -16,7 +16,6 @@ use super::{
     db::TreeVersion,
     subtree::{SubTreeRestorer, SubTreeSubscriber},
     wal::Wal,
-    GenericTree,
 };
 
 pub fn tree_actor<A>(
@@ -149,13 +148,13 @@ where
         let key = key.into();
         let bin = bincode::serialize(&key).unwrap();
         let msg = GetRecord::<Key, Value>::new(bin);
-        let response = self.inner.async_ask(msg).await.unwrap();
-        Ok(response.value)
+        self.inner.async_ask(msg).await?
     }
 
     pub(crate) async fn get_mem_table_snapshot(&self) -> anyhow::Result<Vec<Record>> {
-        let result = self.inner.async_ask(GetMemTableSnapshot).await.unwrap();
-        Ok(result.list)
+        let result = self.inner.async_ask(GetMemTableSnapshot).await?;
+        let list = result?;
+        Ok(list)
     }
 
     pub async fn get_first(&self) -> anyhow::Result<Option<(Key, Option<Value>)>> {
@@ -167,8 +166,8 @@ where
     }
 
     async fn get_head_or_tail(&self, end: ListEnd) -> anyhow::Result<Option<(Key, Option<Value>)>> {
-        let result = self.inner.async_ask(end).await.unwrap();
-        if let Some(option) = result.option {
+        let result = self.inner.async_ask(end).await?;
+        if let Some(option) = result? {
             Ok(Some(record_bin_to_value(&option)))
         } else {
             Ok(None)

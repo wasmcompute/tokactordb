@@ -3,7 +3,6 @@ mod disk;
 mod ids;
 mod record;
 mod relationships;
-mod tx;
 
 use std::fmt::{Debug, Display};
 

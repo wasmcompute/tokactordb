@@ -10,7 +10,6 @@ use tokactor::{Actor, ActorRef};
 use actor::DbActor;
 pub use builder::TreeVersion;
 pub use messages::*;
-use tokio::sync::oneshot;
 pub use version::VersionedTree;
 
 use crate::Aggregate;
@@ -25,14 +24,12 @@ use super::{
 
 pub struct Database {
     inner: ActorRef<DbActor>,
-    startup_registry: Vec<oneshot::Receiver<()>>,
 }
 
 impl Database {
     pub fn new() -> Self {
         Self {
             inner: DbActor::new().start(),
-            startup_registry: Vec::new(),
         }
     }
 
@@ -70,7 +67,6 @@ impl Database {
 
         source_tree.register_restorer(restorer).await;
         source_tree.register_subscriber(subscriber);
-        // self.startup_registry.push(ready_rx);
         Ok(tree)
     }
 
@@ -102,7 +98,6 @@ impl Database {
 
         source_tree.register_restorer(restorer).await;
         source_tree.register_subscriber(subscriber);
-        // self.startup_registry.push(ready_rx);
         Ok(tree)
     }
 
@@ -118,15 +113,11 @@ impl Database {
                 self.inner.async_ask(Restore::new(path)).await.unwrap();
             for item in items {
                 println!("Restoring    ->    {}", item);
-                self.inner.async_ask(RestoreItem(item)).await.unwrap();
+                let result = self.inner.async_ask(RestoreItem(item)).await?;
+                result?;
             }
         }
-        self.inner.async_ask(RestoreComplete).await.unwrap();
-        for ready in self.startup_registry.drain(..) {
-            let _ = ready.await;
-        }
-
-        Ok(())
+        self.inner.async_ask(RestoreComplete).await?
     }
 
     pub async fn dump(self, path: impl AsRef<Path>) -> anyhow::Result<()> {

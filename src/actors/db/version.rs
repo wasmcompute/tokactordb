@@ -1,10 +1,14 @@
 use std::marker::PhantomData;
 
 use crc::{Crc, CRC_32_ISCSI};
-use tokio::sync::{mpsc, oneshot};
+use tokactor::{
+    util::builder::{ActorAskRef, CtxBuilder},
+    Actor, Ask, Ctx, DeadActorResult, Handler,
+};
 
 use crate::actors::tree::{PrimaryKey, RecordValue};
 
+/// Store a particular version of a tree. This value is saved to the database
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VersionedTree {
     version: u64,
@@ -60,6 +64,35 @@ impl VersionedTree {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct UpgradedVersion {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+impl UpgradedVersion {
+    pub fn new(key: Vec<u8>, value: Vec<u8>) -> Self {
+        Self { key, value }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UpgradeVersion {
+    past_key: Vec<u8>,
+    past_value: Vec<u8>,
+}
+
+impl UpgradeVersion {
+    pub fn new(past_key: Vec<u8>, past_value: Vec<u8>) -> Self {
+        Self {
+            past_key,
+            past_value,
+        }
+    }
+}
+
+/// Actor used to upgrade one value of a record to another.
+#[derive(Debug)]
 pub struct VersionedTreeUpgradeActor<PastKey, PastValue, CurrentKey, CurrentValue>
 where
     PastKey: PrimaryKey,
@@ -73,34 +106,21 @@ where
     _current_value: PhantomData<CurrentValue>,
 }
 
-#[derive(Debug)]
-pub struct UpgradeVersion {
-    past_key: Vec<u8>,
-    past_value: Vec<u8>,
-    response: oneshot::Sender<(Vec<u8>, Vec<u8>)>,
-}
-
-impl UpgradeVersion {
-    pub fn new(
-        past_key: Vec<u8>,
-        past_value: Vec<u8>,
-        response: oneshot::Sender<(Vec<u8>, Vec<u8>)>,
-    ) -> Self {
-        Self {
-            past_key,
-            past_value,
-            response,
-        }
-    }
-}
-
-impl<PastKey, PastValue, CurrentKey, CurrentValue>
-    VersionedTreeUpgradeActor<PastKey, PastValue, CurrentKey, CurrentValue>
+impl<Pk, Pv, Ck, Cv> Actor for VersionedTreeUpgradeActor<Pk, Pv, Ck, Cv>
 where
-    PastKey: PrimaryKey,
-    PastValue: RecordValue,
-    CurrentKey: PrimaryKey + From<PastKey>,
-    CurrentValue: RecordValue + From<PastValue>,
+    Pk: PrimaryKey,
+    Pv: RecordValue,
+    Ck: PrimaryKey + From<Pk>,
+    Cv: RecordValue + From<Pv>,
+{
+}
+
+impl<Pk, Pv, Ck, Cv> VersionedTreeUpgradeActor<Pk, Pv, Ck, Cv>
+where
+    Pk: PrimaryKey,
+    Pv: RecordValue,
+    Ck: PrimaryKey + From<Pk>,
+    Cv: RecordValue + From<Pv>,
 {
     pub fn new() -> Self {
         Self {
@@ -111,25 +131,38 @@ where
         }
     }
 
-    pub fn spawn(self) -> mpsc::Sender<UpgradeVersion> {
-        let (tx, mut rx) = mpsc::channel::<UpgradeVersion>(10);
-
-        let fut = async move {
-            while let Some(upgrade) = rx.recv().await {
-                let past_value: PastValue = serde_json::from_slice(&upgrade.past_value).unwrap();
-                let past_key: PastKey = bincode::deserialize(&upgrade.past_key).unwrap();
-
-                let current_value = CurrentValue::from(past_value);
-                let current_key = CurrentKey::from(past_key);
-
-                let current_value_vec = serde_json::to_vec(&current_value).unwrap();
-                let current_key_vec = bincode::serialize(&current_key).unwrap();
-
-                let _ = upgrade.response.send((current_key_vec, current_value_vec));
-            }
-        };
-        tokio::spawn(fut);
-
-        tx
+    pub fn spawn_with_ctx<P: Actor + Handler<DeadActorResult<Self>>>(
+        self,
+        ctx: &Ctx<P>,
+    ) -> ActorAskRef<UpgradeVersion, UpgradedVersion> {
+        let (asker,) = CtxBuilder::new(self).asker::<UpgradeVersion>().spawn(ctx);
+        asker
     }
+}
+
+/// TODO(Alec): Can this be done in type safe way? Right now, it doesn't look like it
+impl<Pk, Pv, Ck, Cv> Ask<UpgradeVersion> for VersionedTreeUpgradeActor<Pk, Pv, Ck, Cv>
+where
+    Pk: PrimaryKey,
+    Pv: RecordValue,
+    Ck: PrimaryKey + From<Pk>,
+    Cv: RecordValue + From<Pv>,
+{
+    type Result = UpgradedVersion;
+
+    fn handle(&mut self, upgrade: UpgradeVersion, _: &mut Ctx<Self>) -> Self::Result {
+        let past_value: Pv = serde_json::from_slice(&upgrade.past_value).unwrap();
+        let past_key: Pk = bincode::deserialize(&upgrade.past_key).unwrap();
+
+        let current_value = Cv::from(past_value);
+        let current_key = Ck::from(past_key);
+
+        let current_value_vec = serde_json::to_vec(&current_value).unwrap();
+        let current_key_vec = bincode::serialize(&current_key).unwrap();
+
+        UpgradedVersion::new(current_key_vec, current_value_vec)
+    }
+
+    // TODO(Alec): Shouldn't this be blocking, there is a lot of serializing and
+    // deserializing here.
 }

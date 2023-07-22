@@ -306,18 +306,27 @@ async fn tickets<'a>(
 
 async fn run() -> anyhow::Result<()> {
     let mut cli = Cli::new();
+    // Create a new database. Set it up by registering all the tables
     let mut db = Database::new();
+
+    // Add the board table
     let board_store = db
         .create::<U32, Board>("Boards")?
-        .migrate::<U32, BoardV2>()?
+        .migrate::<U32, BoardV2>()
+        .await?
         .unwrap()
         .await?;
+    // Add the Ticket table (that is linked to a board)
     let ticket_store = db.create::<U64, Ticket>("Tickets")?.unwrap().await?;
+
+    // Create an index of tickets on a given board
     let board_tickets = db
         .create_index("Board Ticket Index", &ticket_store, |value| {
             Some(&value.board)
         })
         .await?;
+
+    // Create some statistics for all tickets
     let board_statistics = db
         .create_aggregate(
             "Board Ticket Stats",
@@ -327,7 +336,7 @@ async fn run() -> anyhow::Result<()> {
         )
         .await?;
 
-    // let mut total_ticket_count = db.aggragate::<u32, Ticket, TotalTickets>("Total Tickets")?;
+    // Now with all of the database tables declared, we want to restore the database
     db.restore(".db").await?;
 
     println!("\nTask Cli Database!\n");
