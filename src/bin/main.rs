@@ -7,6 +7,7 @@ use std::{
 use conventually::{
     Aggregate, AggregateTree, Change, Database, SubTree, Tree, Update, ID, U32, U64,
 };
+use tracing::Level;
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Board {
@@ -40,7 +41,7 @@ impl From<Board> for BoardV2 {
 
 impl std::fmt::Display for BoardV2 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.len() == {}", self.name, self.name_len)
+        write!(f, "'{}'.len() == {}", self.name, self.name_len)
     }
 }
 
@@ -147,6 +148,15 @@ impl Aggregate<U64, Ticket> for TicketBoardStatistics {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tracing_subscriber::fmt()
+        .pretty()
+        // all spans/events with a level higher than TRACE (e.g, info, warn, etc.)
+        // will be written to stdout.
+        .with_max_level(Level::TRACE)
+        .with_writer(std::io::stdout)
+        // sets this to be the default, global collector for this application.
+        .init();
+
     run().await.unwrap();
 }
 

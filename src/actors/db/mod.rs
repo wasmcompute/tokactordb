@@ -65,13 +65,12 @@ impl Database {
         let UtilTreeAddress {
             subscriber,
             tree,
-            ready_rx,
             restorer,
-        } = tree.spawn();
+        } = self.inner.ask(tree).await?;
 
         source_tree.register_restorer(restorer).await;
         source_tree.register_subscriber(subscriber);
-        self.startup_registry.push(ready_rx);
+        // self.startup_registry.push(ready_rx);
         Ok(tree)
     }
 
@@ -98,13 +97,12 @@ impl Database {
         let UtilTreeAddress {
             subscriber,
             tree,
-            ready_rx,
             restorer,
-        } = tree.spawn();
+        } = self.inner.ask(tree).await?;
 
         source_tree.register_restorer(restorer).await;
         source_tree.register_subscriber(subscriber);
-        self.startup_registry.push(ready_rx);
+        // self.startup_registry.push(ready_rx);
         Ok(tree)
     }
 
@@ -132,7 +130,7 @@ impl Database {
     }
 
     pub async fn dump(self, path: impl AsRef<Path>) -> anyhow::Result<()> {
-        let wal = self.inner.ask(()).await.unwrap();
+        let wal = self.inner.ask(RequestWal()).await.unwrap();
         wal.dump(path).await.unwrap();
         Ok(())
     }

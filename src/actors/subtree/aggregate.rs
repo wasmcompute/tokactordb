@@ -1,15 +1,16 @@
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
-use tokio::sync::{mpsc, oneshot};
+use tokactor::{util::builder::CtxBuilder, Actor, AsyncAsk, Ctx, DeadActorResult, Handler};
 
 use crate::{
     actors::tree::{PrimaryKey, RecordValue},
     Aggregate, Change, Tree, Update,
 };
 
-use super::{AggregateTree, SubTreeRestorer, SubTreeSubscriber, UtilTreeAddress};
-
-type IdentityFn<ID, Value> = dyn Fn(&Value) -> Option<&ID> + Send + Sync + 'static;
+use super::{
+    messages::{ChangeItem, RestoreItem},
+    AggregateTree, IdentityFn, SubTreeRestorer, SubTreeSubscriber, UtilTreeAddress,
+};
 
 pub struct AggregateTreeActor<
     ID: PrimaryKey,
@@ -19,7 +20,31 @@ pub struct AggregateTreeActor<
 > {
     tree: Tree<ID, (Record, Vec<Key>)>,
     _source_tree: Tree<Key, Value>,
-    identity: Box<IdentityFn<ID, Value>>,
+    identity: Box<dyn IdentityFn<ID, Value>>,
+}
+
+impl<ID, Record, Key, Value> std::fmt::Debug for AggregateTreeActor<ID, Record, Key, Value>
+where
+    ID: PrimaryKey,
+    Record: Aggregate<Key, Value> + RecordValue,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AggregateTreeActor")
+            .field("tree", &self.tree)
+            .field("_source_tree", &self._source_tree)
+            .finish()
+    }
+}
+
+impl<ID, Record, Key, Value> Actor for AggregateTreeActor<ID, Record, Key, Value>
+where
+    ID: PrimaryKey,
+    Record: Aggregate<Key, Value> + RecordValue,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
 }
 
 #[derive(Debug)]
@@ -54,8 +79,8 @@ where
                 match old {
                     Some(old) => {
                         // updated value
-                        let old_id = (self.identity)(&old);
-                        let new_id = (self.identity)(&new);
+                        let old_id = self.identity.identify(&old);
+                        let new_id = self.identity.identify(&new);
                         match (old_id, new_id) {
                             (Some(old_id), Some(new_id)) => {
                                 if old_id == new_id {
@@ -80,14 +105,14 @@ where
                     }
                     None => {
                         // new value
-                        if let Some(id) = (self.identity)(&new) {
+                        if let Some(id) = self.identity.identify(&new) {
                             self.create(id, &change.key, &*new).await;
                         }
                     }
                 }
             }
             Update::Del { old } => {
-                if let Some(old_id) = (self.identity)(&old) {
+                if let Some(old_id) = self.identity.identify(&old) {
                     self.delete(old_id, &*change.key, &*old).await
                 }
             }
@@ -165,68 +190,83 @@ where
         }
     }
 
-    pub fn spawn(self) -> UtilTreeAddress<AggregateTree<ID, Record>, Key, Value> {
-        let (ready_tx, ready_rx) = oneshot::channel();
-        let (restore_tx, mut restore_rx) =
-            mpsc::channel::<(Arc<Vec<u8>>, Arc<Option<Vec<u8>>>)>(10);
-        let (subscribe_tx, mut subscribe_rx) =
-            mpsc::channel::<(Change<Arc<Key>, Arc<Value>>, oneshot::Sender<()>)>(10);
-        let (actor_tx, mut actor_rx) = mpsc::channel::<(ID, oneshot::Sender<Option<Record>>)>(10);
-
-        let _subscribe_tx = subscribe_tx.clone();
-        let fut = async move {
-            // Keep the subscriber for the changes open. This way even if the
-            // references to the sender are destroyed, subscribe_rx will never
-            // return `None`.
-            let _ = _subscribe_tx;
-            let mut actor = self;
-
-            // First, continue looping until all of the items in the database have
-            // been restored.
-            while let Some((key, value)) = restore_rx.recv().await {
-                if let Ok(key) = bincode::deserialize::<Key>(&key) {
-                    if let Some(value) = &*value {
-                        if let Ok(value) = serde_json::from_slice::<Value>(value) {
-                            if let Some(id) = (actor.identity)(&value) {
-                                println!("Adding item {:?} to list {:?} with {:?}", id, key, value);
-                                actor.create(id, &key, &value).await;
-                                continue;
-                            }
-                        }
-                    }
-                }
-                println!("Skipping record")
-            }
-
-            let _ = ready_tx.send(());
-
-            loop {
-                tokio::select! {
-                    change = subscribe_rx.recv() => {
-                        if let Some((change, tx)) = change{
-                            actor.change(change).await;
-                            let _ = tx.send(());
-                        }
-                    },
-                    message = actor_rx.recv() => {
-                        if let Some((id, tx)) = message {
-                            let _ = tx.send(actor.get(id).await);
-                        }
-                    }
-                }
-            }
-        };
-
-        tokio::spawn(fut);
-
+    pub fn spawn_with_ctx<P: Actor + Handler<DeadActorResult<Self>>>(
+        self,
+        ctx: &Ctx<P>,
+    ) -> UtilTreeAddress<AggregateTree<ID, Record>, Key, Value> {
+        let (restore_tx, subscribe_tx, get_tx) = CtxBuilder::new(self)
+            .ask_asyncer::<RestoreItem>()
+            .ask_asyncer::<ChangeItem<Key, Value>>()
+            .ask_asyncer::<ID>()
+            .spawn(ctx);
         let restorer = SubTreeRestorer::new(restore_tx);
         let subscriber = SubTreeSubscriber::new(subscribe_tx);
-        let tree = AggregateTree::new(actor_tx);
+        let tree = AggregateTree::new(get_tx);
         UtilTreeAddress {
-            ready_rx,
             restorer,
             subscriber,
             tree,
         }
+    }
+}
+
+impl<ID, Record, Key, Value> AsyncAsk<RestoreItem> for AggregateTreeActor<ID, Record, Key, Value>
+where
+    ID: PrimaryKey,
+    Record: Aggregate<Key, Value> + RecordValue,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    type Output = ();
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
+
+    fn handle<'a>(&'a mut self, restore: RestoreItem, _: &mut Ctx<Self>) -> Self::Future<'a> {
+        if let Ok((key, Some(value))) = restore.deserialize::<Key, Value>() {
+            return Box::pin(async move {
+                if let Some(id) = self.identity.identify(&value) {
+                    println!("Adding item {:?} to list {:?} with {:?}", id, key, value);
+                    self.create(id, &key, &value).await;
+                }
+            });
+        }
+        println!("Skipping record");
+        Box::pin(async {})
+    }
+}
+
+impl<ID, Record, Key, Value> AsyncAsk<ChangeItem<Key, Value>>
+    for AggregateTreeActor<ID, Record, Key, Value>
+where
+    ID: PrimaryKey,
+    Record: Aggregate<Key, Value> + RecordValue,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    type Output = ();
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
+
+    fn handle<'a>(
+        &'a mut self,
+        chg: ChangeItem<Key, Value>,
+        _: &mut Ctx<Self>,
+    ) -> Self::Future<'a> {
+        Box::pin(async move {
+            self.change(chg.into_inner()).await;
+        })
+    }
+}
+
+impl<ID, Record, Key, Value> AsyncAsk<ID> for AggregateTreeActor<ID, Record, Key, Value>
+where
+    ID: PrimaryKey,
+    Record: Aggregate<Key, Value> + RecordValue,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    type Output = Option<Record>;
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
+
+    fn handle<'a>(&'a mut self, id: ID, _: &mut Ctx<Self>) -> Self::Future<'a> {
+        Box::pin(async move { self.get(id).await })
     }
 }

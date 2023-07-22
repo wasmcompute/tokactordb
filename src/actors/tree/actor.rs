@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
-use tokactor::{Actor, Ask, AsyncAsk, AsyncHandle, Ctx, Handler};
+use tokactor::{Actor, Ask, AsyncAsk, Ctx, Handler};
 
 use crate::actors::{
     db::{RestoreComplete, RestoreItem, TreeVersion},
@@ -97,9 +97,10 @@ impl<Key> AsyncAsk<InsertRecord<Key>> for TreeActor
 where
     Key: PrimaryKey,
 {
-    type Result = InsertSuccess<Key>;
+    type Output = InsertSuccess<Key>;
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle(&mut self, msg: InsertRecord<Key>, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle<'a>(&'a mut self, msg: InsertRecord<Key>, _: &mut Ctx<Self>) -> Self::Future<'a> {
         let key = if let Some(max) = self.max.as_ref() {
             let mut key: Key = bincode::deserialize(max).unwrap();
             key.increment()
@@ -127,7 +128,7 @@ where
         self.max = Some(serailize_key.clone());
         let write_enabled: bool = self.write_enabled;
         let version = self.version;
-        ctx.anonymous_handle(async move {
+        Box::pin(async move {
             if write_enabled {
                 if let Err(err) = wal.write(table, version, serailize_key, msg.value).await {
                     println!("{err}");
@@ -140,16 +141,17 @@ where
 }
 
 impl AsyncAsk<UpdateRecord> for TreeActor {
-    type Result = ();
+    type Output = ();
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle(&mut self, msg: UpdateRecord, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle<'a>(&'a mut self, msg: UpdateRecord, _: &mut Ctx<Self>) -> Self::Future<'a> {
         let wal = self.wal.clone();
         let table = self.name.clone();
         self.memtable
             .insert(msg.key.clone(), self.version, Some(msg.value.clone()));
         let write_enabled: bool = self.write_enabled;
         let version = self.version;
-        ctx.anonymous_handle(async move {
+        Box::pin(async move {
             if write_enabled {
                 if let Err(err) = wal.write(table, version, msg.key, msg.value).await {
                     println!("{err}");
@@ -161,20 +163,21 @@ impl AsyncAsk<UpdateRecord> for TreeActor {
 }
 
 impl<Key: PrimaryKey, Value: RecordValue> AsyncAsk<GetRecord<Key, Value>> for TreeActor {
-    type Result = GetRecordResult<Value>;
+    type Output = GetRecordResult<Value>;
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle(
-        &mut self,
+    fn handle<'a>(
+        &'a mut self,
         msg: GetRecord<Key, Value>,
         ctx: &mut Ctx<Self>,
-    ) -> AsyncHandle<Self::Result> {
+    ) -> Self::Future<'a> {
         let option = self.memtable.get(&msg.key);
         if option.is_none() {
-            return ctx.anonymous_handle(async move { GetRecordResult::new(None) });
+            return Box::pin(async move { GetRecordResult::new(None) });
         }
         let record = option.unwrap();
         if record.version == self.version {
-            ctx.anonymous_handle(async move {
+            Box::pin(async move {
                 GetRecordResult::new(Some(serde_json::from_slice(&record.data).unwrap()))
             })
         } else {
@@ -184,7 +187,7 @@ impl<Key: PrimaryKey, Value: RecordValue> AsyncAsk<GetRecord<Key, Value>> for Tr
             let max_version = self.version;
             let key = msg.key;
             let addr = ctx.address();
-            ctx.anonymous_handle(async move {
+            Box::pin(async move {
                 // 1. Upgrade value to latest version
                 let (key, value) =
                     Self::upgrade(&versions, max_version, key, record.data, record.version).await;
@@ -202,23 +205,24 @@ impl<Key: PrimaryKey, Value: RecordValue> AsyncAsk<GetRecord<Key, Value>> for Tr
 }
 
 impl AsyncAsk<ListEnd> for TreeActor {
-    type Result = ListEndResult;
+    type Output = ListEndResult;
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle(&mut self, msg: ListEnd, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle<'a>(&'a mut self, msg: ListEnd, ctx: &mut Ctx<Self>) -> Self::Future<'a> {
         let option = match msg {
             ListEnd::Head => self.memtable.get_first(),
             ListEnd::Tail => self.memtable.get_last(),
         };
         if let Some((key, opt)) = option {
             if let Some(value) = opt {
-                println!("{} == {}", self.version, value.version);
+                // println!("{} == {}", self.version, value.version);
                 if self.version == value.version {
-                    ctx.anonymous_handle(async move { ListEndResult::new(key, value.data) })
+                    Box::pin(async move { ListEndResult::new(key, value.data) })
                 } else {
                     let versions = self.versions.clone();
                     let max_version = self.version;
                     let addr = ctx.address();
-                    ctx.anonymous_handle(async move {
+                    Box::pin(async move {
                         println!("Upgrading");
                         let (key, value) =
                             Self::upgrade(&versions, max_version, key, value.data, value.version)
@@ -232,23 +236,24 @@ impl AsyncAsk<ListEnd> for TreeActor {
                     })
                 }
             } else {
-                ctx.anonymous_handle(async move { ListEndResult::key(key) })
+                Box::pin(async move { ListEndResult::key(key) })
             }
         } else {
-            ctx.anonymous_handle(async { ListEndResult::none() })
+            Box::pin(async { ListEndResult::none() })
         }
     }
 }
 
 impl AsyncAsk<GetMemTableSnapshot> for TreeActor {
-    type Result = Snapshot;
+    type Output = Snapshot;
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle(&mut self, _: GetMemTableSnapshot, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle<'a>(&'a mut self, _: GetMemTableSnapshot, ctx: &mut Ctx<Self>) -> Self::Future<'a> {
         let max = self.version;
         let addr = ctx.address();
         let versions = self.versions.clone();
         let snapshot = self.memtable.as_sorted_vec();
-        ctx.anonymous_handle(async move {
+        Box::pin(async move {
             let mut list = Vec::with_capacity(snapshot.len());
             for (key, value) in snapshot {
                 if let Some(mem) = value {

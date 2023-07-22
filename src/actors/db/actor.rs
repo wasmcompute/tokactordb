@@ -1,16 +1,20 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, future::Future, pin::Pin, time::Duration};
 
-use tokactor::{Actor, Ask, AsyncAsk, AsyncHandle, Ctx, DeadActorResult, Handler};
+use tokactor::{Actor, Ask, AsyncAsk, Ctx, DeadActorResult, Handler};
 
-use crate::actors::{
-    tree::{tree_actor, TreeActor},
-    wal::{new_wal_actor, Wal, WalActor, WalRestoredItems},
-    GenericTree,
+use crate::{
+    actors::{
+        subtree::{AggregateTreeActor, IndexTreeActor, UtilTreeAddress},
+        tree::{tree_actor, PrimaryKey, RecordValue, TreeActor},
+        wal::{new_wal_actor, Wal, WalActor, WalRestoredItems},
+        GenericTree,
+    },
+    Aggregate, AggregateTree, SubTree,
 };
 
 use super::{
     messages::{NewTreeRoot, Restore, RestoreItem, TreeRoot},
-    RestoreComplete,
+    RequestWal, RestoreComplete,
 };
 
 pub struct DbActor {
@@ -53,9 +57,10 @@ impl Ask<NewTreeRoot> for DbActor {
 }
 
 impl AsyncAsk<Restore> for DbActor {
-    type Result = WalRestoredItems;
+    type Output = WalRestoredItems;
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle(&mut self, msg: Restore, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle<'a>(&'a mut self, msg: Restore, _: &mut Ctx<Self>) -> Self::Future<'a> {
         // The restore message given to us here is a directory. In the future we'd
         // want to do some advanced logic here such as like  get metadata files
         // and read all of the WAL logs that are avaliable to us.
@@ -65,7 +70,7 @@ impl AsyncAsk<Restore> for DbActor {
         let wal_address = self.wal();
         let wal_path = msg.directory.join("wal");
 
-        ctx.anonymous_handle(async move {
+        Box::pin(async move {
             if !wal_path.exists() {
                 WalRestoredItems::new(vec![])
             } else {
@@ -76,46 +81,86 @@ impl AsyncAsk<Restore> for DbActor {
 }
 
 impl AsyncAsk<RestoreComplete> for DbActor {
-    type Result = ();
+    type Output = ();
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle(&mut self, _: RestoreComplete, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
-        let trees = self.trees.values().map(Clone::clone).collect::<Vec<_>>();
-        ctx.anonymous_handle(async move {
-            for tree in trees {
-                tree.send_restore_complete().await;
+    fn handle<'a>(&'a mut self, _: RestoreComplete, _: &mut Ctx<Self>) -> Self::Future<'a> {
+        Box::pin(async move {
+            let mut fut = Vec::with_capacity(self.trees.len());
+            for tree in self.trees.values() {
+                fut.push(tree.send_restore_complete());
             }
+            futures::future::join_all(fut).await;
         })
     }
 }
 
 impl AsyncAsk<RestoreItem> for DbActor {
-    type Result = ();
+    type Output = ();
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle(&mut self, msg: RestoreItem, ctx: &mut Ctx<Self>) -> AsyncHandle<Self::Result> {
+    fn handle<'a>(&'a mut self, msg: RestoreItem, _: &mut Ctx<Self>) -> Self::Future<'a> {
         if let Some(tree) = self.trees.get(&msg.table) {
-            let tree_addr = tree.clone();
-            ctx.anonymous_handle(async move {
-                tree_addr.send_generic_item(msg).await;
+            Box::pin(async move {
+                tree.send_generic_item(msg).await;
             })
         } else {
-            ctx.anonymous_handle(async move {})
+            Box::pin(async move {})
         }
     }
 }
 
-impl Ask<()> for DbActor {
+impl Ask<RequestWal> for DbActor {
     type Result = Wal;
 
-    fn handle(&mut self, _: (), _: &mut Ctx<Self>) -> Self::Result {
+    fn handle(&mut self, _: RequestWal, _: &mut Ctx<Self>) -> Self::Result {
         self.wal()
     }
 }
 
-/**
- * Actor Failures:
- * - Tree actor
- * - Wal (Write Ahead Log) Actor
- */
+/*******************************************************************************
+ * Spawn Index and Aggregate tree actors
+ ******************************************************************************/
+
+impl<ID, Key, Value> Ask<IndexTreeActor<ID, Key, Value>> for DbActor
+where
+    ID: PrimaryKey,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    type Result = UtilTreeAddress<SubTree<ID, Value>, Key, Value>;
+
+    fn handle(&mut self, idx: IndexTreeActor<ID, Key, Value>, ctx: &mut Ctx<Self>) -> Self::Result {
+        idx.spawn_with_ctx(ctx)
+    }
+}
+
+impl<
+        ID: PrimaryKey,
+        Record: Aggregate<Key, Value> + RecordValue,
+        Key: PrimaryKey,
+        Value: RecordValue,
+    > Ask<AggregateTreeActor<ID, Record, Key, Value>> for DbActor
+{
+    type Result = UtilTreeAddress<AggregateTree<ID, Record>, Key, Value>;
+
+    fn handle(
+        &mut self,
+        agg: AggregateTreeActor<ID, Record, Key, Value>,
+        ctx: &mut Ctx<Self>,
+    ) -> Self::Result {
+        agg.spawn_with_ctx(ctx)
+    }
+}
+
+/*******************************************************************************
+ * Handle the death of child actors
+ * - TreeActor
+ * - WalActor
+ * - IndexTreeActor
+ * - AggregateTreeActor
+ ******************************************************************************/
+
 impl Handler<DeadActorResult<TreeActor>> for DbActor {
     fn handle(&mut self, _: DeadActorResult<TreeActor>, _: &mut Ctx<Self>) {
         todo!()
@@ -124,6 +169,33 @@ impl Handler<DeadActorResult<TreeActor>> for DbActor {
 
 impl Handler<DeadActorResult<WalActor>> for DbActor {
     fn handle(&mut self, _: DeadActorResult<WalActor>, _: &mut Ctx<Self>) {
+        todo!()
+    }
+}
+
+impl<ID, Key, Value> Handler<DeadActorResult<IndexTreeActor<ID, Key, Value>>> for DbActor
+where
+    ID: PrimaryKey,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    fn handle(&mut self, _: DeadActorResult<IndexTreeActor<ID, Key, Value>>, _: &mut Ctx<Self>) {
+        todo!()
+    }
+}
+
+impl<
+        ID: PrimaryKey,
+        Record: Aggregate<Key, Value> + RecordValue,
+        Key: PrimaryKey,
+        Value: RecordValue,
+    > Handler<DeadActorResult<AggregateTreeActor<ID, Record, Key, Value>>> for DbActor
+{
+    fn handle(
+        &mut self,
+        _: DeadActorResult<AggregateTreeActor<ID, Record, Key, Value>>,
+        _: &mut Ctx<Self>,
+    ) {
         todo!()
     }
 }

@@ -32,6 +32,7 @@ where
     ctx.spawn(tree)
 }
 
+#[derive(Debug)]
 pub struct Tree<Key, Value>
 where
     Key: PrimaryKey,

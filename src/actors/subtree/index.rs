@@ -1,20 +1,45 @@
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
-use tokio::sync::{mpsc, oneshot};
+use futures::Future;
+use tokactor::{util::builder::CtxBuilder, Actor, AsyncAsk, Ctx, DeadActorResult, Handler};
 
 use crate::{
     actors::tree::{PrimaryKey, RecordValue},
     Change, Tree, Update,
 };
 
-use super::{Request, SubTree, SubTreeRestorer, SubTreeSubscriber, UtilTreeAddress};
-
-type IdentityFn<ID, Value> = dyn Fn(&Value) -> Option<&ID> + Send + Sync + 'static;
+use super::{
+    messages::{ChangeItem, RestoreItem},
+    IdentityFn, RefactorMeResponse, Request, SubTree, SubTreeRestorer, SubTreeSubscriber,
+    UtilTreeAddress,
+};
 
 pub struct IndexTreeActor<ID: PrimaryKey, Key: PrimaryKey, Value: RecordValue> {
     tree: Tree<ID, Vec<Key>>,
     source_tree: Tree<Key, Value>,
-    identity: Box<IdentityFn<ID, Value>>,
+    identity: Box<dyn IdentityFn<ID, Value>>,
+}
+
+impl<ID, Key, Value> Actor for IndexTreeActor<ID, Key, Value>
+where
+    ID: PrimaryKey,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+}
+
+impl<ID, Key, Value> std::fmt::Debug for IndexTreeActor<ID, Key, Value>
+where
+    ID: PrimaryKey,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndexTreeActor")
+            .field("tree", &self.tree)
+            .field("source_tree", &self.source_tree)
+            .finish()
+    }
 }
 
 impl<ID, Key, Value> IndexTreeActor<ID, Key, Value>
@@ -41,8 +66,8 @@ where
                 match old {
                     Some(old) => {
                         // updated value
-                        let old_id = (self.identity)(&old);
-                        let new_id = (self.identity)(&new);
+                        let old_id = self.identity.identify(&old);
+                        let new_id = self.identity.identify(&new);
                         match (old_id, new_id) {
                             (Some(old_id), Some(new_id)) => {
                                 if old_id == new_id {
@@ -65,14 +90,14 @@ where
                     }
                     None => {
                         // new value
-                        if let Some(id) = (self.identity)(&new) {
+                        if let Some(id) = self.identity.identify(&new) {
                             self.add_key_to_list(id, (*change.key).clone()).await;
                         }
                     }
                 }
             }
             Update::Del { old } => {
-                if let Some(old_id) = (self.identity)(&old) {
+                if let Some(old_id) = self.identity.identify(&old) {
                     self.remove_key_from_list(old_id, &*change.key).await
                 }
             }
@@ -135,74 +160,89 @@ where
         None
     }
 
-    pub fn spawn(self) -> UtilTreeAddress<SubTree<ID, Value>, Key, Value> {
-        let (ready_tx, ready_rx) = oneshot::channel();
-        let (restore_tx, mut restore_rx) =
-            mpsc::channel::<(Arc<Vec<u8>>, Arc<Option<Vec<u8>>>)>(10);
-        let (subscribe_tx, mut subscribe_rx) =
-            mpsc::channel::<(Change<Arc<Key>, Arc<Value>>, oneshot::Sender<()>)>(10);
-        let (actor_tx, mut actor_rx) = mpsc::channel::<Request<ID, Value>>(10);
-
-        let _subscribe_tx = subscribe_tx.clone();
-        let fut = async move {
-            // Keep the subscriber for the changes open. This way even if the
-            // references to the sender are destroyed, subscribe_rx will never
-            // return `None`.
-            let _ = _subscribe_tx;
-            let mut actor = self;
-
-            // First, continue looping until all of the items in the database have
-            // been restored.
-            while let Some((key, value)) = restore_rx.recv().await {
-                if let Ok(key) = bincode::deserialize::<Key>(&key) {
-                    if let Some(value) = &*value {
-                        if let Ok(value) = serde_json::from_slice::<Value>(value) {
-                            if let Some(id) = (actor.identity)(&value) {
-                                println!("Adding item {:?} to list {:?} with {:?}", id, key, value);
-                                actor.add_key_to_list(id, key).await;
-                                continue;
-                            }
-                        }
-                    }
-                }
-                println!("Skipping record")
-            }
-
-            println!("Completed restoring sublist. Starting up");
-            let _ = ready_tx.send(());
-
-            loop {
-                tokio::select! {
-                    change = subscribe_rx.recv() => {
-                        if let Some((change, tx)) = change{
-                            actor.change(change).await;
-                            let _ = tx.send(());
-                        }
-                    },
-                    message = actor_rx.recv() => {
-                        if let Some(request) = message {
-                            match request {
-                                Request::List((id, tx)) => tx.send(actor.get(id).await).unwrap(),
-                                Request::Item((id, index, op, tx)) => {
-                                    tx.send(actor.get_item_by_index(id, index, op).await).unwrap();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        };
-
-        tokio::spawn(fut);
-
+    pub fn spawn_with_ctx<P: Actor + Handler<DeadActorResult<Self>>>(
+        self,
+        ctx: &Ctx<P>,
+    ) -> UtilTreeAddress<SubTree<ID, Value>, Key, Value> {
+        let (restore_tx, subscribe_tx, get_tx) = CtxBuilder::new(self)
+            .ask_asyncer::<RestoreItem>()
+            .ask_asyncer::<ChangeItem<Key, Value>>()
+            .ask_asyncer::<Request<ID, Value>>()
+            .spawn(ctx);
         let restorer = SubTreeRestorer::new(restore_tx);
         let subscriber = SubTreeSubscriber::new(subscribe_tx);
-        let tree = SubTree::new(actor_tx);
+        let tree = SubTree::new(get_tx);
         UtilTreeAddress {
-            ready_rx,
             restorer,
             subscriber,
             tree,
         }
+    }
+}
+
+impl<ID, Key, Value> AsyncAsk<RestoreItem> for IndexTreeActor<ID, Key, Value>
+where
+    ID: PrimaryKey,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    type Output = ();
+
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
+
+    fn handle<'a>(&'a mut self, restore: RestoreItem, _: &mut Ctx<Self>) -> Self::Future<'a> {
+        if let Ok((key, Some(value))) = restore.deserialize::<Key, Value>() {
+            return Box::pin(async move {
+                if let Some(id) = self.identity.identify(&value) {
+                    println!("Adding item {:?} to list {:?} with {:?}", id, key, value);
+                    self.add_key_to_list(id, key).await;
+                }
+            });
+        }
+        println!("Skipping record");
+        Box::pin(async {})
+    }
+}
+
+impl<ID, Key, Value> AsyncAsk<ChangeItem<Key, Value>> for IndexTreeActor<ID, Key, Value>
+where
+    ID: PrimaryKey,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    type Output = ();
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
+
+    fn handle<'a>(
+        &'a mut self,
+        change: ChangeItem<Key, Value>,
+        _: &mut Ctx<Self>,
+    ) -> Self::Future<'a> {
+        Box::pin(async move { self.change(change.into_inner()).await })
+    }
+}
+
+impl<ID, Key, Value> AsyncAsk<Request<ID, Value>> for IndexTreeActor<ID, Key, Value>
+where
+    ID: PrimaryKey,
+    Key: PrimaryKey,
+    Value: RecordValue,
+{
+    type Output = RefactorMeResponse<Value>;
+    type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
+
+    fn handle<'a>(
+        &'a mut self,
+        request: Request<ID, Value>,
+        _: &mut Ctx<Self>,
+    ) -> Self::Future<'a> {
+        Box::pin(async move {
+            match request {
+                Request::List(id) => RefactorMeResponse::List(self.get(id).await),
+                Request::Item((id, index, op)) => {
+                    RefactorMeResponse::Item(self.get_item_by_index(id, index, op).await)
+                }
+            }
+        })
     }
 }

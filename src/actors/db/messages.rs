@@ -10,6 +10,9 @@ use crate::actors::{tree::TreeActor, wal::Item};
 use super::builder::TreeVersion;
 
 #[derive(Debug)]
+pub struct RequestWal();
+
+#[derive(Debug)]
 pub struct NewTreeRoot {
     pub name: String,
     pub versions: Vec<TreeVersion>,
