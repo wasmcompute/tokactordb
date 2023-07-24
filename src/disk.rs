@@ -29,6 +29,7 @@ impl Disk {
     }
 
     pub fn dump(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        println!("Dumping to {:?}", path.as_ref());
         self.flush()?;
         std::fs::write(path, &self.contents)?;
         Ok(())
@@ -36,6 +37,10 @@ impl Disk {
 
     pub fn as_reader(&self) -> &[u8] {
         self.contents.as_ref()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.contents.is_empty()
     }
 }
 
