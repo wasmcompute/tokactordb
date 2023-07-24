@@ -1,4 +1,4 @@
-# Conventually
+# tokactordb
 
 A database where you declare all of the relationships through code. You program
 the business logic and we handle the storage. By understanding how you may use
