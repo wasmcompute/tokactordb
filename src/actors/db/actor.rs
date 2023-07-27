@@ -9,7 +9,7 @@ use crate::{
         fs::FileSystem,
         subtree::{AggregateTreeActor, IndexTreeActor, UtilTreeAddress},
         tree::{tree_actor, PrimaryKey, RecordValue, TreeActor},
-        wal::{new_wal_actor, Item, Wal, WalActor, WalRestoredItems},
+        wal::{Item, Wal, WalActor, WalRestoredItems},
     },
     Aggregate, AggregateTree, SubTree,
 };
@@ -43,8 +43,8 @@ impl Actor for DbActor {
     where
         Self: Actor,
     {
-        let wal = new_wal_actor(ctx, Duration::from_millis(10));
-        self.wal = Some(wal);
+        // let wal = new_wal_actor(ctx, Duration::from_millis(10));
+        // self.wal = Some(wal);
     }
 }
 

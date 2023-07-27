@@ -307,7 +307,7 @@ async fn tickets<'a>(
 async fn run() -> anyhow::Result<()> {
     let mut cli = Cli::new();
     // Create a filesystem for the database to use
-    let filesystem = FileSystem::system();
+    let filesystem = FileSystem::system("/");
     // Create a new database. Set it up by registering all the tables
     let db = Database::new(filesystem).await?;
 
@@ -339,7 +339,7 @@ async fn run() -> anyhow::Result<()> {
         .await?;
 
     // Now with all of the database tables declared, we want to restore the database
-    db.restore(".db").await?;
+    db.restore().await?;
 
     println!("\nTask Cli Database!\n");
 

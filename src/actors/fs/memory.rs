@@ -1,6 +1,10 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    io::{self, ErrorKind},
+    path::PathBuf,
+};
 
-use super::file::FNode;
+use super::{file::FNode, messages::OpenFileOptions, DbFile};
 
 #[derive(Debug)]
 enum Ident {
@@ -9,14 +13,6 @@ enum Ident {
 }
 
 impl Ident {
-    /// Returns `true` if the ident is [`File`].
-    ///
-    /// [`File`]: Ident::File
-    #[must_use]
-    fn is_file(&self) -> bool {
-        matches!(self, Self::File(..))
-    }
-
     /// Returns `true` if the ident is [`Dir`].
     ///
     /// [`Dir`]: Ident::Dir
@@ -32,13 +28,13 @@ pub struct InMemoryFs {
 }
 
 impl InMemoryFs {
-    pub fn create_dir(&self, path: PathBuf) -> std::io::Result<()> {
+    pub fn create_dir(&mut self, path: PathBuf) -> io::Result<()> {
         if let Some(entry) = self.file_system.get(&path) {
             match entry {
                 Ident::Dir() => {}
                 Ident::File(_) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::AlreadyExists,
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
                         format!("{:?} already exists as a file", path),
                     ))
                 }
@@ -47,5 +43,44 @@ impl InMemoryFs {
             self.file_system.insert(path, Ident::Dir());
         }
         Ok(())
+    }
+
+    pub fn open_file(&mut self, options: OpenFileOptions) -> io::Result<DbFile> {
+        if !options.write && options.truncate {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Can't truncate file without write access",
+            ));
+        }
+        if let Some(file) = self.file_system.get(&options.path) {
+            if options.create_new {
+                return Err(io::Error::new(ErrorKind::NotFound, "File already exists"));
+            }
+            match file {
+                Ident::Dir() => {
+                    return Err(io::Error::new(
+                        ErrorKind::AlreadyExists,
+                        "Path already exists as a directory",
+                    ))
+                }
+                Ident::File(_) => todo!(),
+            }
+        }
+        // File was not found, search the parent directory above to validate the path exists
+        if let Some(parent) = options.path.parent() {
+            if let Some(file) = self.file_system.get(parent) {
+                if file.is_dir() && (options.create || options.create_new) {
+                    let file = FNode::new();
+                    self.file_system
+                        .insert(options.path, Ident::File(file.clone()));
+                    return Ok(DbFile::in_memory(file));
+                }
+            }
+        }
+
+        Err(io::Error::new(
+            ErrorKind::NotFound,
+            "Directory does not exist",
+        ))
     }
 }

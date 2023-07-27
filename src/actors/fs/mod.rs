@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use tokactor::{Actor, Ask, Scheduler};
+use tokactor::{Actor, Ask, Ctx, Scheduler};
 
 use self::{
     memory::InMemoryFs,
@@ -16,6 +16,7 @@ mod node;
 mod system;
 
 pub use facade::FileSystemFacade;
+pub use messages::OpenFileOptions;
 pub use node::DbFile;
 
 #[derive(Debug)]
@@ -48,18 +49,18 @@ impl FileSystem {
     }
 
     fn open_base_dir(&self) -> anyhow::Result<()> {
-        match self.filesystem {
-            FileSystemImpl::Memory(memory) => {
+        match &self.filesystem {
+            FileSystemImpl::Memory(_) => {
                 // no need to open this because we are in memory
                 Ok(())
             }
-            FileSystemImpl::System(system) => system.open_base_dir(self.base_path),
+            FileSystemImpl::System(system) => system.open_base_dir(&self.base_path),
         }
     }
 
-    fn create_dir_if_not_exist(&self, path: PathBuf) -> anyhow::Result<()> {
+    fn create_dir_if_not_exist(&mut self, path: PathBuf) -> anyhow::Result<()> {
         let absolute_path = self.base_path.join(path);
-        match self.filesystem {
+        match &mut self.filesystem {
             FileSystemImpl::Memory(memory) => {
                 memory.create_dir(absolute_path)?;
             }
@@ -69,12 +70,21 @@ impl FileSystem {
         }
         Ok(())
     }
+
+    fn open_file(&mut self, mut options: OpenFileOptions) -> anyhow::Result<DbFile> {
+        options.path = self.base_path.join(options.path);
+        let output = match &mut self.filesystem {
+            FileSystemImpl::Memory(memory) => memory.open_file(options),
+            FileSystemImpl::System(system) => system.open_file(options),
+        }?;
+        Ok(output)
+    }
 }
 
 impl Ask<OpenBaseDir> for FileSystem {
     type Result = anyhow::Result<()>;
 
-    fn handle(&mut self, _: OpenBaseDir, context: &mut tokactor::Ctx<Self>) -> Self::Result {
+    fn handle(&mut self, _: OpenBaseDir, _: &mut Ctx<Self>) -> Self::Result {
         self.open_base_dir()
     }
 
@@ -89,9 +99,21 @@ impl Ask<ValidateOrCreateDir> for FileSystem {
     fn handle(
         &mut self,
         ValidateOrCreateDir(path): ValidateOrCreateDir,
-        context: &mut tokactor::Ctx<Self>,
+        _: &mut Ctx<Self>,
     ) -> Self::Result {
         self.create_dir_if_not_exist(path)
+    }
+
+    fn scheduler() -> Scheduler {
+        Scheduler::Blocking
+    }
+}
+
+impl Ask<OpenFileOptions> for FileSystem {
+    type Result = anyhow::Result<DbFile>;
+
+    fn handle(&mut self, options: OpenFileOptions, _: &mut Ctx<Self>) -> Self::Result {
+        self.open_file(options)
     }
 
     fn scheduler() -> Scheduler {

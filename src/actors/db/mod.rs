@@ -20,7 +20,6 @@ use super::{
     fs::{FileSystem, FileSystemFacade},
     subtree::{AggregateTree, AggregateTreeActor, IndexTreeActor, SubTree, UtilTreeAddress},
     tree::{PrimaryKey, RecordValue, Tree},
-    wal::WalRestoredItems,
 };
 
 pub struct Database {
@@ -110,18 +109,24 @@ impl Database {
         self.filesystem.validate_or_create_dir("manifest").await?;
         self.filesystem.validate_or_create_dir("storage").await?;
 
-        let WalRestoredItems { items } = self.inner.async_ask(RestoreDbPath::new(path)).await?;
-        for item in items {
-            println!("Restoring    ->    {}", item);
-            let result = self.inner.async_ask(item).await?;
-            result?;
-        }
-        self.inner.async_ask(RestoreComplete).await?
+        let manifest_fs = self.filesystem.rebase("manifest");
+
+        // let system = ManifestSystem::restore(self.filesystem.clone())?;
+        // let wal = Wal::restore(system.clone(), self.filesystem.clone())?;
+
+        // let WalRestoredItems { items } = self.inner.async_ask(RestoreDbPath::new(path)).await?;
+        // for item in items {
+        //     println!("Restoring    ->    {}", item);
+        //     let result = self.inner.async_ask(item).await?;
+        //     result?;
+        // }
+        // self.inner.async_ask(RestoreComplete).await?
+        Ok(())
     }
 
-    pub async fn dump(self, path: impl AsRef<Path>) -> anyhow::Result<()> {
-        let wal = self.inner.ask(RequestWal()).await.unwrap();
-        wal.dump(path).await.unwrap();
+    pub async fn dump(self, _: impl AsRef<Path>) -> anyhow::Result<()> {
+        // let wal = self.inner.ask(RequestWal()).await.unwrap();
+        // wal.dump(path).await.unwrap();
         Ok(())
     }
 }

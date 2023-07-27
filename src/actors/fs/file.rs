@@ -1,27 +1,44 @@
-use std::{io::Write, path::Path};
+use std::{
+    io::Write,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 const MAX_BUFFER_SIZE: usize = 4096;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FNode {
+    pub inner: Arc<RwLock<Disk>>,
+}
+
+impl FNode {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(Disk::new())),
+        }
+    }
+}
+
+impl Default for FNode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
+pub struct Disk {
     write_pointer: usize,
     buffer: [u8; MAX_BUFFER_SIZE],
     contents: Vec<u8>,
 }
 
-impl FNode {
+impl Disk {
     pub fn new() -> Self {
         Self {
             write_pointer: 0,
             buffer: [0_u8; MAX_BUFFER_SIZE],
             contents: Vec::new(),
         }
-    }
-
-    fn from_content(contents: Vec<u8>) -> Self {
-        let mut this = Self::new();
-        this.contents = contents;
-        this
     }
 
     pub fn restore(path: impl AsRef<Path>) -> anyhow::Result<Self> {
@@ -42,9 +59,21 @@ impl FNode {
     pub fn is_empty(&self) -> bool {
         self.contents.is_empty()
     }
+
+    fn from_content(contents: Vec<u8>) -> Self {
+        let mut this = Self::new();
+        this.contents = contents;
+        this
+    }
 }
 
-impl Write for FNode {
+impl Default for Disk {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Write for Disk {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let avaliable_bytes = MAX_BUFFER_SIZE - self.write_pointer;
         if avaliable_bytes == 0 {

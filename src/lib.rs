@@ -1,8 +1,7 @@
 mod actors;
-mod disk;
 mod ids;
-mod actors;
-mod ids;
+mod record;
+mod relationships;
 
 use std::fmt::{Debug, Display};
 
@@ -14,8 +13,8 @@ use actors::tree::{PrimaryKey, RecordValue};
 pub use ids::*;
 pub use relationships::*;
 
-pub use record::{Aggregate, Change, Update};
 pub use actors::fs::FileSystem;
+pub use record::{Aggregate, Change, Update};
 
 /// Allow for an ID to be incrementable. Support the ability to increment the
 /// ID inside the interal framework.

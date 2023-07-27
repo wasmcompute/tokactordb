@@ -22,3 +22,9 @@ The goals for this database are the following:
 3. (Index) Declare indexes that you want to be able to keep in sorted order
 4. (Select) Declare sub lists that you want to be able to query
 5. (Constraints) Declare what should be consider valid data before insertion into database
+
+## Goal of database
+
+On-disk key-value database that is defined using code. The database will have
+all tables, quires, and indexes defined inside of the project. These changes will
+be tracked inside of the databases metadata before recovery.
