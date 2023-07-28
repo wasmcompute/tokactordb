@@ -6,7 +6,7 @@ pub struct OpenBaseDir;
 #[derive(Debug)]
 pub struct ValidateOrCreateDir(pub PathBuf);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OpenFileOptions {
     pub read: bool,
     pub write: bool,

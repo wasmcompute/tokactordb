@@ -17,6 +17,14 @@ impl FNode {
             inner: Arc::new(RwLock::new(Disk::new())),
         }
     }
+
+    pub fn truncate(&self) {
+        self.inner.write().unwrap().truncate();
+    }
+
+    pub fn append(&self) {
+        self.inner.write().unwrap().append();
+    }
 }
 
 impl Default for FNode {
@@ -41,10 +49,6 @@ impl Disk {
         }
     }
 
-    pub fn restore(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        Ok(Self::from_content(std::fs::read(path)?))
-    }
-
     pub fn dump(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         println!("Dumping to {:?}", path.as_ref());
         self.flush()?;
@@ -52,18 +56,22 @@ impl Disk {
         Ok(())
     }
 
-    pub fn as_reader(&self) -> &[u8] {
-        self.contents.as_ref()
+    pub fn as_reader(&self) -> std::io::Result<&[u8]> {
+        Ok(self.contents.as_ref())
     }
 
     pub fn is_empty(&self) -> bool {
         self.contents.is_empty()
     }
 
-    fn from_content(contents: Vec<u8>) -> Self {
-        let mut this = Self::new();
-        this.contents = contents;
-        this
+    fn truncate(&mut self) {
+        self.write_pointer = 0;
+        self.contents.clear();
+        self.buffer = [0_u8; MAX_BUFFER_SIZE];
+    }
+
+    fn append(&mut self) {
+        self.write_pointer = self.contents.len();
     }
 }
 
