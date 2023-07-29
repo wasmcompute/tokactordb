@@ -22,8 +22,8 @@ impl FNode {
         self.inner.write().unwrap().truncate();
     }
 
-    pub fn append(&self) {
-        self.inner.write().unwrap().append();
+    pub fn end_of_file_pointer(&self) -> usize {
+        self.inner.write().unwrap().contents.len()
     }
 }
 
@@ -35,7 +35,7 @@ impl Default for FNode {
 
 #[derive(Debug)]
 pub struct Disk {
-    write_pointer: usize,
+    buffer_pointer: usize,
     buffer: [u8; MAX_BUFFER_SIZE],
     contents: Vec<u8>,
 }
@@ -43,7 +43,7 @@ pub struct Disk {
 impl Disk {
     pub fn new() -> Self {
         Self {
-            write_pointer: 0,
+            buffer_pointer: 0,
             buffer: [0_u8; MAX_BUFFER_SIZE],
             contents: Vec::new(),
         }
@@ -51,7 +51,8 @@ impl Disk {
 
     pub fn dump(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         println!("Dumping to {:?}", path.as_ref());
-        self.flush()?;
+        let mut p = 0;
+        self.as_writer(&mut p).flush()?;
         std::fs::write(path, &self.contents)?;
         Ok(())
     }
@@ -64,14 +65,17 @@ impl Disk {
         self.contents.is_empty()
     }
 
-    fn truncate(&mut self) {
-        self.write_pointer = 0;
-        self.contents.clear();
-        self.buffer = [0_u8; MAX_BUFFER_SIZE];
+    pub fn as_writer<'a>(&'a mut self, pointer: &'a mut usize) -> RefDisk<'a> {
+        RefDisk {
+            disk: self,
+            pointer,
+        }
     }
 
-    fn append(&mut self) {
-        self.write_pointer = self.contents.len();
+    fn truncate(&mut self) {
+        self.contents.clear();
+        self.buffer = [0_u8; MAX_BUFFER_SIZE];
+        self.buffer_pointer = 0;
     }
 }
 
@@ -81,26 +85,35 @@ impl Default for Disk {
     }
 }
 
-impl Write for Disk {
+pub struct RefDisk<'a> {
+    disk: &'a mut Disk,
+    pointer: &'a mut usize,
+}
+
+impl<'a> Write for RefDisk<'a> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let avaliable_bytes = MAX_BUFFER_SIZE - self.write_pointer;
+        let mut avaliable_bytes = MAX_BUFFER_SIZE - self.disk.buffer_pointer;
         if avaliable_bytes == 0 {
             self.flush()?;
+            avaliable_bytes = MAX_BUFFER_SIZE;
         }
         let stream = if buf.len() > avaliable_bytes {
             &buf[..avaliable_bytes]
         } else {
             buf
         };
-        self.buffer[self.write_pointer..self.write_pointer + stream.len()].clone_from_slice(stream);
-        self.write_pointer += stream.len();
+        self.disk.buffer[self.disk.buffer_pointer..self.disk.buffer_pointer + stream.len()]
+            .clone_from_slice(stream);
+        *self.pointer += stream.len();
+        self.disk.buffer_pointer += stream.len();
         Ok(stream.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.contents
-            .extend_from_slice(&self.buffer[..self.write_pointer]);
-        self.write_pointer = 0;
+        self.disk
+            .contents
+            .extend_from_slice(&self.disk.buffer[..self.disk.buffer_pointer]);
+        self.disk.buffer_pointer = 0;
         Ok(())
     }
 }

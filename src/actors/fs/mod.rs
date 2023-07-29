@@ -58,14 +58,18 @@ impl FileSystem {
         }
     }
 
-    fn create_dir_if_not_exist(&mut self, path: impl Into<PathBuf>) -> anyhow::Result<()> {
+    fn create_dir_if_not_exist(&mut self, path: impl Into<PathBuf>) -> std::io::Result<()> {
         let absolute_path = self.base_path.join(path.into());
         match &mut self.filesystem {
             FileSystemImpl::Memory(memory) => {
                 memory.create_dir(absolute_path)?;
             }
             FileSystemImpl::System(system) => {
-                system.create_dir(absolute_path)?;
+                if let Err(err) = system.create_dir(absolute_path) {
+                    if err.kind() != std::io::ErrorKind::AlreadyExists {
+                        return Err(err);
+                    }
+                }
             }
         }
         Ok(())
@@ -101,7 +105,8 @@ impl Ask<ValidateOrCreateDir> for FileSystem {
         ValidateOrCreateDir(path): ValidateOrCreateDir,
         _: &mut Ctx<Self>,
     ) -> Self::Result {
-        self.create_dir_if_not_exist(path)
+        self.create_dir_if_not_exist(path)?;
+        Ok(())
     }
 
     fn scheduler() -> Scheduler {
@@ -131,86 +136,185 @@ mod tests {
     use crate::{actors::fs::OpenFileOptions, FileSystem};
 
     #[test]
-    fn succeed_open_base_dir() {
-        let mut mem = FileSystem::in_memory();
-        assert!(mem.open_base_dir().is_ok());
-        assert!(mem.open_base_dir().is_ok())
+    fn succeed_open_base_dir_in_memory() {
+        let mem = FileSystem::in_memory();
+        succeed_open_base_dir(mem);
     }
 
     #[test]
-    fn fail_open_file_with_no_write_and_truncate() {
-        let mut mem = FileSystem::in_memory();
-        let output = mem.open_file(OpenFileOptions::new("file").truncate());
-        assert!(output.is_err());
+    fn succeed_open_base_dir_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex1"));
+        succeed_open_base_dir(mem);
+    }
+
+    fn succeed_open_base_dir(mut fs: FileSystem) {
+        assert!(fs.open_base_dir().is_ok());
+        assert!(fs.open_base_dir().is_ok());
     }
 
     #[test]
-    fn fail_to_open_cause_create_not_set() {
-        let mut mem = FileSystem::in_memory();
-        assert!(mem.open_file(OpenFileOptions::new("file").read()).is_err());
+    fn fail_open_file_with_no_write_and_truncate_in_memory() {
+        let mem = FileSystem::in_memory();
+        fail_open_file_with_invalid_permissions(mem);
     }
 
     #[test]
-    fn fail_open_file_with_create_new_because_exists() {
-        let mut mem = FileSystem::in_memory();
-        assert!(mem.open_base_dir().is_ok());
+    fn fail_open_file_with_no_write_and_truncate_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex2"));
+        fail_open_file_with_invalid_permissions(mem);
+    }
+
+    fn fail_open_file_with_invalid_permissions(mut mem: FileSystem) {
         assert!(mem
-            .open_file(OpenFileOptions::new("file").create_new())
-            .is_ok());
+            .open_file(OpenFileOptions::new("file").truncate())
+            .is_err());
         assert!(mem
-            .open_file(OpenFileOptions::new("file").create_new())
+            .open_file(OpenFileOptions::new("file").create())
             .is_err());
     }
 
     #[test]
-    fn fail_open_file_because_it_is_directory() {
-        let mut mem = FileSystem::in_memory();
+    fn fail_to_open_cause_create_not_set_in_memory() {
+        let mem = FileSystem::in_memory();
+        fail_to_open_cause_create_not_set(mem);
+    }
+
+    #[test]
+    fn fail_to_open_cause_create_not_set_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex3"));
+        fail_to_open_cause_create_not_set(mem);
+    }
+
+    fn fail_to_open_cause_create_not_set(mut mem: FileSystem) {
+        assert!(mem.open_file(OpenFileOptions::new("file").read()).is_err());
+    }
+
+    #[test]
+    fn fail_open_file_with_create_new_because_exists_in_memory() {
+        let mem = FileSystem::in_memory();
+        fail_open_file_with_create_new_because_exists(mem);
+    }
+
+    #[test]
+    fn fail_open_file_with_create_new_because_exists_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex4"));
+        fail_open_file_with_create_new_because_exists(mem);
+    }
+
+    fn fail_open_file_with_create_new_because_exists(mut mem: FileSystem) {
+        assert!(mem.open_base_dir().is_ok());
+        assert!(mem
+            .open_file(OpenFileOptions::new("file").create().write())
+            .is_ok());
+        assert!(mem
+            .open_file(OpenFileOptions::new("file").create_new().write())
+            .is_err());
+    }
+
+    #[test]
+    fn fail_open_file_because_it_is_directory_in_memory() {
+        let mem = FileSystem::in_memory();
+        fail_open_file_because_it_is_directory(mem);
+    }
+
+    #[test]
+    fn fail_open_file_because_it_is_directory_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex5"));
+        fail_open_file_because_it_is_directory(mem);
+    }
+
+    fn fail_open_file_because_it_is_directory(mut mem: FileSystem) {
+        assert!(mem.open_base_dir().is_ok());
         assert!(mem.create_dir_if_not_exist("dir").is_ok());
         assert!(mem.open_file(OpenFileOptions::new("dir").create()).is_err());
     }
 
     #[test]
-    fn fail_to_open_file_because_no_parent_file() {
-        let mut mem = FileSystem::in_memory();
-        assert!(mem.open_base_dir().is_ok());
-        assert!(mem
-            .open_file(OpenFileOptions::new("valid").create())
-            .is_err());
-        assert!(mem
-            .open_file(OpenFileOptions::new("not/valid").create())
-            .is_err());
-        assert!(mem
-            .open_file(OpenFileOptions::new("still/not/valid").create())
-            .is_err());
+    fn fail_to_open_file_because_no_parent_file_in_memory() {
+        let mem = FileSystem::in_memory();
+        fail_to_open_file_because_no_parent_file(mem);
     }
 
     #[test]
-    fn fail_to_open_parent_file_not_dir() {
-        let mut mem = FileSystem::in_memory();
+    fn fail_to_open_file_because_no_parent_file_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex6"));
+        fail_to_open_file_because_no_parent_file(mem);
+    }
+
+    fn fail_to_open_file_because_no_parent_file(mut mem: FileSystem) {
         assert!(mem.open_base_dir().is_ok());
         assert!(mem
-            .open_file(OpenFileOptions::new("dir_file").create())
+            .open_file(OpenFileOptions::new("valid").write().create())
             .is_ok());
         assert!(mem
-            .open_file(OpenFileOptions::new("dir_file/file").create())
+            .open_file(OpenFileOptions::new("not/valid").write().create())
+            .is_err());
+        assert!(mem
+            .open_file(OpenFileOptions::new("still/not/valid").write().create())
             .is_err());
     }
 
     #[test]
-    fn succeed_open_file_with_no_read_or_write() {
-        let mut mem = FileSystem::in_memory();
-        assert!(mem.open_base_dir().is_ok());
-        assert!(mem.open_file(OpenFileOptions::new("file").create()).is_ok());
-        let mut file = mem.open_file(OpenFileOptions::new("file")).unwrap();
-
-        let mut buffer: [u8; 1] = [1_u8; 1];
-        assert!(file.read(&mut buffer).is_err());
-        assert!(file.write(&buffer).is_err());
+    fn fail_to_open_parent_file_not_dir_in_memory() {
+        let mem = FileSystem::in_memory();
+        fail_to_open_parent_file_not_dir(mem);
     }
 
     #[test]
-    fn succeed_open_file_with_truncate_option() {
-        let mut mem = FileSystem::in_memory();
+    fn fail_to_open_parent_file_not_dir_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex7"));
+        fail_to_open_parent_file_not_dir(mem);
+    }
+
+    fn fail_to_open_parent_file_not_dir(mut mem: FileSystem) {
+        assert!(mem.open_base_dir().is_ok());
+        assert!(mem
+            .open_file(OpenFileOptions::new("dir_file").write().create())
+            .is_ok());
+        assert!(mem
+            .open_file(OpenFileOptions::new("dir_file/file").write().create())
+            .is_err());
+    }
+
+    #[test]
+    fn succeed_open_file_with_no_read_or_write_in_memory() {
+        let mem = FileSystem::in_memory();
+        succeed_open_file_with_no_read_or_write(mem);
+    }
+
+    #[test]
+    fn succeed_open_file_with_no_read_or_write_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex12"));
+        succeed_open_file_with_no_read_or_write(mem);
+    }
+
+    fn succeed_open_file_with_no_read_or_write(mut mem: FileSystem) {
+        assert!(mem.open_base_dir().is_ok());
+        assert!(mem
+            .open_file(OpenFileOptions::new("file").write().create())
+            .is_ok());
+
+        let mut buffer: [u8; 1] = [1_u8; 1];
+        let mut file = mem.open_file(OpenFileOptions::new("file").read()).unwrap();
+        assert!(file.write(&buffer).is_err());
+
+        let mut file = mem.open_file(OpenFileOptions::new("file").write()).unwrap();
+        assert!(file.read(&mut buffer).is_err());
+    }
+
+    #[test]
+    fn succeed_open_file_with_truncate_option_in_memory() {
+        let mem = FileSystem::in_memory();
+        succeed_open_file_with_truncate_option(mem);
+    }
+
+    #[test]
+    fn succeed_open_file_with_truncate_option_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex11"));
+        succeed_open_file_with_truncate_option(mem);
+    }
+
+    fn succeed_open_file_with_truncate_option(mut mem: FileSystem) {
         assert!(mem.open_base_dir().is_ok());
         let mut file = mem
             .open_file(OpenFileOptions::new("file").create().write())
@@ -226,8 +330,18 @@ mod tests {
     }
 
     #[test]
-    fn succeed_open_with_append_option() {
-        let mut mem = FileSystem::in_memory();
+    fn succeed_open_with_append_option_in_memory() {
+        let mem = FileSystem::in_memory();
+        succeed_open_with_append_option(mem);
+    }
+
+    #[test]
+    fn succeed_open_with_append_option_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex10"));
+        succeed_open_with_append_option(mem);
+    }
+
+    fn succeed_open_with_append_option(mut mem: FileSystem) {
         assert!(mem.open_base_dir().is_ok());
         let options = OpenFileOptions::new("file").create().write().read();
 
@@ -249,13 +363,51 @@ mod tests {
     }
 
     #[test]
-    fn succeed_create_dir_if_not_exist() {
-        let mut mem = FileSystem::in_memory();
+    fn succeed_in_writing_more_then_max_buffer_in_memory() {
+        let mem = FileSystem::in_memory();
+        succeed_in_writing_more_then_max_buffer(mem);
+    }
+
+    #[test]
+    fn succeed_in_writing_more_then_max_buffer_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex9"));
+        succeed_in_writing_more_then_max_buffer(mem);
+    }
+
+    fn succeed_in_writing_more_then_max_buffer(mut mem: FileSystem) {
+        assert!(mem.open_base_dir().is_ok());
+        let options = OpenFileOptions::new("file").create().write().read();
+
+        let buf_write = [1_u8; 16000];
+        let mut file1 = mem.open_file(options.clone().truncate()).unwrap();
+        assert!(file1.write_all(&buf_write).is_ok());
+        assert!(file1.flush().is_ok());
+
+        let mut buf_read = Vec::new();
+        let mut file = mem.open_file(options).unwrap();
+        assert!(file.read_to_end(&mut buf_read).is_ok());
+        assert_eq!(buf_read.len(), buf_write.len());
+        assert_eq!(buf_read, buf_write);
+    }
+
+    #[test]
+    fn succeed_create_dir_if_not_exist_in_memory() {
+        let mem = FileSystem::in_memory();
+        succeed_create_dir_if_not_exist(mem);
+    }
+
+    #[test]
+    fn succeed_create_dir_if_not_exist_in_system() {
+        let mem = FileSystem::system(temp_dir().join("ex8"));
+        succeed_create_dir_if_not_exist(mem);
+    }
+
+    fn succeed_create_dir_if_not_exist(mut mem: FileSystem) {
         assert!(mem.open_base_dir().is_ok());
         assert!(mem.create_dir_if_not_exist("new-dir").is_ok());
         assert!(mem.create_dir_if_not_exist("new-dir").is_ok());
         assert!(mem
-            .open_file(OpenFileOptions::new("new-file").create())
+            .open_file(OpenFileOptions::new("new-file").write().create())
             .is_ok());
         assert!(mem.create_dir_if_not_exist("new-file").is_err());
     }

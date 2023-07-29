@@ -52,6 +52,11 @@ impl InMemoryFs {
                 ErrorKind::InvalidInput,
                 "Can't truncate file without write access",
             ))
+        } else if !options.write && !options.read {
+            Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Can't open file without read and write permissions",
+            ))
         } else if let Some(file) = self.file_system.get(&options.path) {
             match file {
                 Ident::Dir() => Err(io::Error::new(
@@ -62,12 +67,18 @@ impl InMemoryFs {
                     if options.create_new {
                         Err(io::Error::new(ErrorKind::NotFound, "File already exists"))
                     } else {
+                        let mut pointer = 0;
                         if options.write && options.truncate {
                             file.truncate();
                         } else if options.write && options.append {
-                            file.append();
+                            pointer = file.end_of_file_pointer();
                         }
-                        Ok(DbFile::in_memory(file.clone(), options.read, options.write))
+                        Ok(DbFile::in_memory(
+                            file.clone(),
+                            pointer,
+                            options.read,
+                            options.write,
+                        ))
                     }
                 }
             }
@@ -75,11 +86,19 @@ impl InMemoryFs {
             if let Some(parent) = options.path.parent() {
                 // File was not found, search the parent directory above to validate the path exists
                 if let Some(file) = self.file_system.get(parent) {
-                    if file.is_dir() && (options.create || options.create_new) {
-                        let file = FNode::new();
-                        self.file_system
-                            .insert(options.path, Ident::File(file.clone()));
-                        return Ok(DbFile::in_memory(file, options.read, options.write));
+                    // create the file, if you can
+                    if file.is_dir() {
+                        if options.write && (options.create || options.create_new) {
+                            let file = FNode::new();
+                            self.file_system
+                                .insert(options.path, Ident::File(file.clone()));
+                            return Ok(DbFile::in_memory(file, 0, options.read, options.write));
+                        } else {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidInput,
+                                "Can't create file without write permissions",
+                            ));
+                        }
                     }
                 }
             }

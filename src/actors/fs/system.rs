@@ -21,9 +21,17 @@ impl FsSystem {
         }
     }
 
-    pub fn create_dir(&self, path: PathBuf) -> anyhow::Result<()> {
-        std::fs::create_dir(path)?;
-        Ok(())
+    pub fn create_dir(&self, path: PathBuf) -> io::Result<()> {
+        if path.is_file() {
+            Err(std::io::Error::new(
+                io::ErrorKind::Other,
+                "Directory is already a file",
+            ))
+        } else {
+            let output = std::fs::create_dir(path);
+            println!("{:?}", output);
+            output
+        }
     }
 
     pub fn open_file(&self, options: OpenFileOptions) -> io::Result<DbFile> {
@@ -35,8 +43,9 @@ impl FsSystem {
         opt.create_new(options.create_new);
         opt.append(options.append);
 
-        let file = opt.open(options.path)?;
-        let file = DbFile::system(file);
+        let file = opt.open(options.path);
+        println!("{:?}", file);
+        let file = DbFile::system(file?);
         Ok(file)
     }
 }

@@ -11,8 +11,7 @@ use super::file::FNode;
 pub enum DbFile {
     Memory {
         file: FNode,
-        read_pointer: usize,
-        write_pointer: usize,
+        pointer: usize,
         read: bool,
         write: bool,
     },
@@ -22,11 +21,10 @@ pub enum DbFile {
 impl Actor for DbFile {}
 
 impl DbFile {
-    pub fn in_memory(node: FNode, read: bool, write: bool) -> Self {
+    pub fn in_memory(node: FNode, pointer: usize, read: bool, write: bool) -> Self {
         Self::Memory {
             file: node,
-            read_pointer: 0,
-            write_pointer: 0,
+            pointer,
             read,
             write,
         }
@@ -42,8 +40,7 @@ impl Write for DbFile {
         match self {
             DbFile::Memory {
                 file,
-                read_pointer,
-                write_pointer,
+                pointer,
                 read: _,
                 write,
             } => {
@@ -53,8 +50,9 @@ impl Write for DbFile {
                         "Write permissions not given when openning file",
                     ))
                 } else {
-                    let len = file.inner.write().unwrap().write(buf)?;
-                    *read_pointer += len;
+                    let mut lock = file.inner.write().unwrap();
+                    let mut writer = lock.as_writer(pointer);
+                    let len = writer.write(buf)?;
                     Ok(len)
                 }
             }
@@ -66,8 +64,7 @@ impl Write for DbFile {
         match self {
             DbFile::Memory {
                 file,
-                read_pointer: _,
-                write_pointer: _,
+                pointer,
                 read: _,
                 write,
             } => {
@@ -77,7 +74,7 @@ impl Write for DbFile {
                         "Write permissions not given when openning file",
                     ))
                 } else {
-                    file.inner.write().unwrap().flush()
+                    file.inner.write().unwrap().as_writer(pointer).flush()
                 }
             }
             DbFile::System(file) => file.flush(),
@@ -90,8 +87,7 @@ impl Read for DbFile {
         match self {
             DbFile::Memory {
                 file,
-                read_pointer,
-                write_pointer: _,
+                pointer,
                 read,
                 write: _,
             } => {
@@ -103,7 +99,7 @@ impl Read for DbFile {
                 }
                 let lock = file.inner.read().unwrap();
                 let reader = lock.as_reader()?;
-                let remaining = &reader[*read_pointer..];
+                let remaining = &reader[*pointer..];
                 let read = if remaining.is_empty() {
                     0
                 } else if remaining.len() > buf.len() {
@@ -113,7 +109,7 @@ impl Read for DbFile {
                     buf[..remaining.len()].clone_from_slice(remaining);
                     remaining.len()
                 };
-                *read_pointer += read;
+                *pointer += read;
                 Ok(read)
             }
             DbFile::System(file) => file.read(buf),
