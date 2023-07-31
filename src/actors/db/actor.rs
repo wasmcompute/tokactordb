@@ -6,15 +6,16 @@ use tokactor::{
 
 use crate::{
     actors::{
+        fs::FileSystem,
         subtree::{AggregateTreeActor, IndexTreeActor, UtilTreeAddress},
         tree::{tree_actor, PrimaryKey, RecordValue, TreeActor},
-        wal::{new_wal_actor, Wal, WalActor, WalRestoredItems},
+        wal::{Item, Wal, WalActor, WalRestoredItems},
     },
     Aggregate, AggregateTree, SubTree,
 };
 
 use super::{
-    messages::{NewTreeRoot, Restore, RestoreItem},
+    messages::{NewTreeRoot, RestoreDbPath},
     version::{UpgradeVersion, UpgradedVersion, VersionedTreeUpgradeActor},
     RequestWal, RestoreComplete,
 };
@@ -42,8 +43,8 @@ impl Actor for DbActor {
     where
         Self: Actor,
     {
-        let wal = new_wal_actor(ctx, Duration::from_millis(10));
-        self.wal = Some(wal);
+        // let wal = new_wal_actor(ctx, Duration::from_millis(10));
+        // self.wal = Some(wal);
     }
 }
 
@@ -57,11 +58,11 @@ impl Ask<NewTreeRoot> for DbActor {
     }
 }
 
-impl AsyncAsk<Restore> for DbActor {
+impl AsyncAsk<RestoreDbPath> for DbActor {
     type Output = WalRestoredItems;
     type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle<'a>(&'a mut self, msg: Restore, _: &mut Ctx<Self>) -> Self::Future<'a> {
+    fn handle<'a>(&'a mut self, msg: RestoreDbPath, _: &mut Ctx<Self>) -> Self::Future<'a> {
         // The restore message given to us here is a directory. In the future we'd
         // want to do some advanced logic here such as like  get metadata files
         // and read all of the WAL logs that are avaliable to us.
@@ -102,11 +103,11 @@ impl AsyncAsk<RestoreComplete> for DbActor {
     }
 }
 
-impl AsyncAsk<RestoreItem> for DbActor {
+impl AsyncAsk<Item> for DbActor {
     type Output = anyhow::Result<()>;
     type Future<'a> = Pin<Box<dyn Future<Output = Self::Output> + Send + Sync + 'a>>;
 
-    fn handle<'a>(&'a mut self, msg: RestoreItem, _: &mut Ctx<Self>) -> Self::Future<'a> {
+    fn handle<'a>(&'a mut self, msg: Item, _: &mut Ctx<Self>) -> Self::Future<'a> {
         Box::pin(async move {
             if let Some(tree) = self.trees.get(&msg.table) {
                 tree.send_async(msg).await?;
@@ -177,6 +178,14 @@ where
     }
 }
 
+impl Ask<FileSystem> for DbActor {
+    type Result = ActorRef<FileSystem>;
+
+    fn handle(&mut self, fs: FileSystem, ctx: &mut Ctx<Self>) -> Self::Result {
+        ctx.spawn(fs)
+    }
+}
+
 /*******************************************************************************
  * Handle the death of child actors
  * - TreeActor
@@ -193,6 +202,12 @@ impl Handler<DeadActorResult<TreeActor>> for DbActor {
 
 impl Handler<DeadActorResult<WalActor>> for DbActor {
     fn handle(&mut self, _: DeadActorResult<WalActor>, _: &mut Ctx<Self>) {
+        todo!()
+    }
+}
+
+impl Handler<DeadActorResult<FileSystem>> for DbActor {
+    fn handle(&mut self, _: DeadActorResult<FileSystem>, _: &mut Ctx<Self>) {
         todo!()
     }
 }

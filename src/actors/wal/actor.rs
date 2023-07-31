@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, IoSlice, Write},
+    io::{IoSlice, Write},
     time::Duration,
 };
 
@@ -7,12 +7,9 @@ use anyhow::Error;
 use tokactor::{Actor, AnonymousRef, Ask, Ctx, Handler};
 use tokio::{sync::oneshot, time::Instant};
 
-use crate::{
-    actors::wal::{item::Item, messages::WalRestoredItems},
-    disk::Disk,
-};
+use crate::actors::{fs::DbFile, wal::messages::WalRestoredItems};
 
-use super::messages::{DumpWal, Flush, Insert, WalRestore};
+use super::messages::{Flush, Insert, WalRestore};
 
 struct FlushTask {
     now: Instant,
@@ -22,14 +19,14 @@ struct FlushTask {
 pub struct WalActor {
     flush: Option<FlushTask>,
     buffer: Vec<Insert>,
-    disk: Disk,
+    disk: DbFile,
     flush_buffer_sync: Duration,
 }
 
 impl WalActor {}
 
 impl WalActor {
-    pub fn new(disk: Disk, flush_buffer_sync: Duration) -> Self {
+    pub fn new(disk: DbFile, flush_buffer_sync: Duration) -> Self {
         Self {
             flush: None,
             buffer: Vec::new(),
@@ -77,10 +74,6 @@ impl Actor for WalActor {
     fn mailbox_size() -> usize {
         // accept a lot of messages
         100
-    }
-
-    fn scheduler() -> tokactor::Scheduler {
-        tokactor::Scheduler::NonBlocking
     }
 
     fn on_stopping(&mut self, ctx: &mut Ctx<Self>) {
@@ -133,7 +126,6 @@ impl Ask<WalRestore> for WalActor {
     type Result = WalRestoredItems;
 
     fn handle(&mut self, msg: WalRestore, _: &mut Ctx<Self>) -> Self::Result {
-        assert!(self.disk.is_empty());
         assert!(self.buffer.is_empty());
         assert!(self.flush.is_none());
 
@@ -142,45 +134,31 @@ impl Ask<WalRestore> for WalActor {
 
         // TODO(Alec): ooohhh aren't you naugthy, doing a blocking operation on
         //             an async thread. LOL who cares for now :P
-        self.disk = Disk::restore(path).unwrap();
-        if self.disk.is_empty() {
-            return WalRestoredItems::new(vec![]);
-        }
-        let mut reader = BufReader::new(self.disk.as_reader());
-        reader.fill_buf().unwrap();
+        // self.disk = DbFile::restore(path).unwrap();
+        // if self.disk.is_empty() {
+        return WalRestoredItems::new(vec![]);
+        // }
+        // let mut reader = BufReader::new(self.disk.as_reader());
+        // reader.fill_buf().unwrap();
 
-        let mut items: Vec<Item> = Vec::new();
-        while !reader.buffer().is_empty() {
-            if let Ok(item) = bincode::deserialize_from(&mut reader) {
-                items.push(item);
-            } else {
-                panic!("Failed to read a record from the WAL log")
-            }
-        }
-        let (valids, invalids): (Vec<Item>, Vec<Item>) =
-            items.into_iter().partition(|i| i.is_valid());
+        // let mut items: Vec<Item> = Vec::new();
+        // while !reader.buffer().is_empty() {
+        //     if let Ok(item) = bincode::deserialize_from(&mut reader) {
+        //         items.push(item);
+        //     } else {
+        //         panic!("Failed to read a record from the WAL log")
+        //     }
+        // }
+        // let (valids, invalids): (Vec<Item>, Vec<Item>) =
+        //     items.into_iter().partition(|i| i.is_valid());
 
-        if !invalids.is_empty() {
-            println!("Found invalid records in the WAL");
-            for invalid in invalids {
-                println!("INVALID: {:?}", invalid);
-            }
-        }
+        // if !invalids.is_empty() {
+        //     println!("Found invalid records in the WAL");
+        //     for invalid in invalids {
+        //         println!("INVALID: {:?}", invalid);
+        //     }
+        // }
 
-        WalRestoredItems::new(valids)
-    }
-}
-
-impl Ask<DumpWal> for WalActor {
-    type Result = ();
-    fn handle(&mut self, msg: DumpWal, _: &mut Ctx<Self>) -> Self::Result {
-        // TODO(Alec): Figure out a better way to make the path a more standard
-        //             location. Currently, the DbActor for the `Restore` message
-        //             add's `wal` to the path (which we are doing here.) Whats a
-        //             better standard way of doing this?
-
-        // Ugh everything here sucks, What we should do is just `.await` the actor
-        // and as the last message it puts on itself is a dump message. ewh
-        self.disk.dump(msg.0.join("wal")).unwrap();
+        // WalRestoredItems::new(valids)
     }
 }

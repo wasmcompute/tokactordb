@@ -3,14 +3,14 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use tokactor::{Actor, Ask, AsyncAsk, Ctx, Handler};
 
 use crate::actors::{
-    db::{RestoreComplete, RestoreItem, TreeVersion},
+    db::{RestoreComplete, TreeVersion},
     subtree::SubTreeRestorer,
-    wal::Wal,
+    wal::{Item, Wal},
 };
 
 use super::{
     memtable::MemTable, GetMemTableSnapshot, GetRecord, GetUniqueKey, InsertRecord, InsertSuccess,
-    ListEnd, PrimaryKey, Record, RecordValue, UniqueKey, UpdateRecord,
+    ListEnd, PrimaryKey, Record, RecordValue, UpdateRecord,
 };
 
 pub struct TreeActor {
@@ -84,10 +84,10 @@ impl TreeActor {
 }
 
 impl<Key: PrimaryKey> Ask<GetUniqueKey<Key>> for TreeActor {
-    type Result = UniqueKey<Key>;
+    type Result = Key;
 
     fn handle(&mut self, _: GetUniqueKey<Key>, _: &mut Ctx<Self>) -> Self::Result {
-        UniqueKey(self.get_unique_id())
+        self.get_unique_id()
     }
 }
 
@@ -261,11 +261,11 @@ impl AsyncAsk<GetMemTableSnapshot> for TreeActor {
     }
 }
 
-impl Handler<RestoreItem> for TreeActor {
-    fn handle(&mut self, item: RestoreItem, ctx: &mut Ctx<Self>) {
-        let key = item.0.key;
-        let value = item.0.value;
-        let version = item.0.version;
+impl Handler<Item> for TreeActor {
+    fn handle(&mut self, item: Item, ctx: &mut Ctx<Self>) {
+        let key = item.key;
+        let value = item.value;
+        let version = item.version;
         self.memtable.insert(key.clone(), version, value.clone());
 
         if let Some(list) = self.sub_trees.clone() {

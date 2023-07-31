@@ -53,15 +53,8 @@ where
         }
     }
 
-    async fn get_unique_key(&self) -> anyhow::Result<Key> {
-        Ok(self
-            .inner
-            .ask(GetUniqueKey::<Key>::default())
-            .await
-            .unwrap()
-            .0)
-    }
-
+    /// Insert a value into the database. On insert, the key and value are shared
+    /// between all actors
     pub async fn insert(&self, value: Value) -> anyhow::Result<Key>
     where
         Key: PrimaryKey,
@@ -151,18 +144,38 @@ where
         self.inner.async_ask(msg).await?
     }
 
-    pub(crate) async fn get_mem_table_snapshot(&self) -> anyhow::Result<Vec<Record>> {
-        let result = self.inner.async_ask(GetMemTableSnapshot).await?;
-        let list = result?;
-        Ok(list)
-    }
-
     pub async fn get_first(&self) -> anyhow::Result<Option<(Key, Option<Value>)>> {
         self.get_head_or_tail(ListEnd::Head).await
     }
 
     pub async fn get_last(&self) -> anyhow::Result<Option<(Key, Option<Value>)>> {
         self.get_head_or_tail(ListEnd::Tail).await
+    }
+
+    pub async fn list(&self) -> ListStream<Key, Value> {
+        let tree = Self::new(self.inner.clone());
+        ListStream::new(tree).await
+    }
+
+    pub async fn register_restorer(&self, restorer: SubTreeRestorer) {
+        self.inner.send_async(restorer).await.unwrap();
+    }
+
+    pub(crate) fn register_subscriber(&self, subscriber: SubTreeSubscriber<Key, Value>) {
+        self.subscribers.try_write().unwrap().push(subscriber);
+    }
+
+    pub(crate) fn duplicate(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            subscribers: Arc::clone(&self.subscribers),
+        }
+    }
+
+    pub(crate) async fn get_mem_table_snapshot(&self) -> anyhow::Result<Vec<Record>> {
+        let result = self.inner.async_ask(GetMemTableSnapshot).await?;
+        let list = result?;
+        Ok(list)
     }
 
     async fn get_head_or_tail(&self, end: ListEnd) -> anyhow::Result<Option<(Key, Option<Value>)>> {
@@ -174,24 +187,12 @@ where
         }
     }
 
-    pub async fn list(&self) -> ListStream<Key, Value> {
-        let tree = Self::new(self.inner.clone());
-        ListStream::new(tree).await
-    }
-
-    pub fn register_subscriber(&self, subscriber: SubTreeSubscriber<Key, Value>) {
-        self.subscribers.try_write().unwrap().push(subscriber);
-    }
-
-    pub async fn register_restorer(&self, restorer: SubTreeRestorer) {
-        self.inner.send_async(restorer).await.unwrap();
-    }
-
-    pub(crate) fn duplicate(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            subscribers: Arc::clone(&self.subscribers),
-        }
+    /// Get a unique key that has not been saved to the database. Calling this
+    /// will return the current MAX value of the unique key and then increment
+    /// the max value of the key.
+    async fn get_unique_key(&self) -> anyhow::Result<Key> {
+        let key = self.inner.ask(GetUniqueKey::<Key>::default()).await?;
+        Ok(key)
     }
 }
 

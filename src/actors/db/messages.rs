@@ -1,9 +1,4 @@
-use std::{
-    ops::{Deref, DerefMut},
-    path::PathBuf,
-};
-
-use crate::actors::wal::Item;
+use std::path::PathBuf;
 
 use super::builder::TreeVersion;
 
@@ -23,28 +18,13 @@ impl NewTreeRoot {
 }
 
 #[derive(Debug)]
-pub struct Restore {
+pub struct RestoreDbPath {
     pub directory: PathBuf,
 }
 
-impl Restore {
+impl RestoreDbPath {
     pub fn new(directory: PathBuf) -> Self {
         Self { directory }
-    }
-}
-
-#[derive(Debug)]
-pub struct RestoreItem(pub Item);
-impl Deref for RestoreItem {
-    type Target = Item;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl DerefMut for RestoreItem {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 

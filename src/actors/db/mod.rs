@@ -17,26 +17,28 @@ use crate::Aggregate;
 use self::builder::TreeBuilder;
 
 use super::{
+    fs::{FileSystem, FileSystemFacade},
     subtree::{AggregateTree, AggregateTreeActor, IndexTreeActor, SubTree, UtilTreeAddress},
     tree::{PrimaryKey, RecordValue, Tree},
-    wal::WalRestoredItems,
 };
 
 pub struct Database {
     inner: ActorRef<DbActor>,
+    filesystem: FileSystemFacade,
 }
 
 impl Database {
-    pub fn new() -> Self {
-        Self {
-            inner: DbActor::new().start(),
-        }
+    pub async fn new(fs: FileSystem) -> anyhow::Result<Self> {
+        let database = DbActor::new().start();
+        let filesystem = database.ask(fs).await?;
+        let facade = FileSystemFacade::new(filesystem);
+        Ok(Self {
+            inner: database,
+            filesystem: facade,
+        })
     }
 
-    pub fn create<Key, Value>(
-        &mut self,
-        name: impl ToString,
-    ) -> anyhow::Result<TreeBuilder<Key, Value>>
+    pub fn create<Key, Value>(&self, name: impl ToString) -> anyhow::Result<TreeBuilder<Key, Value>>
     where
         Key: PrimaryKey,
         Value: RecordValue,
@@ -45,7 +47,7 @@ impl Database {
     }
 
     pub async fn create_index<Key, Value, ID, F>(
-        &mut self,
+        &self,
         name: impl ToString,
         source_tree: &Tree<Key, Value>,
         identity: F,
@@ -71,7 +73,7 @@ impl Database {
     }
 
     pub async fn create_aggregate<Record, Key, Value, ID, F>(
-        &mut self,
+        &self,
         name: impl ToString,
         source_tree: &Tree<Key, Value>,
         _: Record,
@@ -101,34 +103,30 @@ impl Database {
         Ok(tree)
     }
 
-    pub async fn restore(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
-        let path = path.as_ref().to_path_buf();
-        if !path.exists() {
-            // there is no reason to restore
-            std::fs::create_dir_all(path)?;
-        } else if path.is_file() {
-            anyhow::bail!("Can't restore because this is a file and not a directory")
-        } else {
-            let WalRestoredItems { items } =
-                self.inner.async_ask(Restore::new(path)).await.unwrap();
-            for item in items {
-                println!("Restoring    ->    {}", item);
-                let result = self.inner.async_ask(RestoreItem(item)).await?;
-                result?;
-            }
-        }
-        self.inner.async_ask(RestoreComplete).await?
-    }
+    pub async fn restore(&self) -> anyhow::Result<()> {
+        self.filesystem.open_base_dir().await?;
+        // We need to validate the system is setup correctly
+        self.filesystem.validate_or_create_dir("manifest").await?;
+        self.filesystem.validate_or_create_dir("storage").await?;
 
-    pub async fn dump(self, path: impl AsRef<Path>) -> anyhow::Result<()> {
-        let wal = self.inner.ask(RequestWal()).await.unwrap();
-        wal.dump(path).await.unwrap();
+        let manifest_fs = self.filesystem.rebase("manifest");
+
+        // let system = ManifestSystem::restore(self.filesystem.clone())?;
+        // let wal = Wal::restore(system.clone(), self.filesystem.clone())?;
+
+        // let WalRestoredItems { items } = self.inner.async_ask(RestoreDbPath::new(path)).await?;
+        // for item in items {
+        //     println!("Restoring    ->    {}", item);
+        //     let result = self.inner.async_ask(item).await?;
+        //     result?;
+        // }
+        // self.inner.async_ask(RestoreComplete).await?
         Ok(())
     }
-}
 
-impl Default for Database {
-    fn default() -> Self {
-        Self::new()
+    pub async fn dump(self, _: impl AsRef<Path>) -> anyhow::Result<()> {
+        // let wal = self.inner.ask(RequestWal()).await.unwrap();
+        // wal.dump(path).await.unwrap();
+        Ok(())
     }
 }

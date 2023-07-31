@@ -110,6 +110,3 @@ impl<Key: PrimaryKey> Default for GetUniqueKey<Key> {
         Self(PhantomData)
     }
 }
-
-#[derive(Debug)]
-pub struct UniqueKey<Key: PrimaryKey>(pub Key);

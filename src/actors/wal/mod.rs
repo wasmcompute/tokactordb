@@ -2,16 +2,12 @@ mod actor;
 mod item;
 mod messages;
 
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::path::PathBuf;
 
-use tokactor::{Actor, ActorRef, Ctx, DeadActorResult, Handler};
+use tokactor::ActorRef;
 use tokio::sync::oneshot;
 
-use self::messages::{DumpWal, WalRestore};
-use crate::disk::Disk;
+use self::messages::WalRestore;
 
 pub use self::item::Item;
 pub use actor::WalActor;
@@ -22,15 +18,15 @@ pub struct Wal {
     inner: ActorRef<WalActor>,
 }
 
-pub fn new_wal_actor<A>(ctx: &mut Ctx<A>, flush_buffer_sync: Duration) -> Wal
-where
-    A: Actor + Handler<DeadActorResult<WalActor>>,
-{
-    let disk = Disk::new();
-    let wal = WalActor::new(disk, flush_buffer_sync);
-    let address = ctx.spawn(wal);
-    Wal { inner: address }
-}
+// pub fn new_wal_actor<A>(ctx: &mut Ctx<A>, flush_buffer_sync: Duration) -> Wal
+// where
+//     A: Actor + Handler<DeadActorResult<WalActor>>,
+// {
+//     // let disk = DbFile::in_memory(FNode::new());
+//     let wal = WalActor::new(disk, flush_buffer_sync);
+//     let address = ctx.spawn(wal);
+//     Wal { inner: address }
+// }
 
 impl Wal {
     pub async fn write(
@@ -56,13 +52,5 @@ impl Wal {
 
     pub async fn restore(&self, wals: PathBuf) -> WalRestoredItems {
         self.inner.ask(WalRestore { path: wals }).await.unwrap()
-    }
-
-    pub async fn dump(&self, wal: impl AsRef<Path>) -> anyhow::Result<()> {
-        self.inner
-            .ask(DumpWal(wal.as_ref().to_path_buf()))
-            .await
-            .unwrap();
-        Ok(())
     }
 }

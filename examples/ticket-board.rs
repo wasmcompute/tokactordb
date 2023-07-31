@@ -4,8 +4,8 @@ use std::{
     time::SystemTime,
 };
 
-use conventually::{
-    Aggregate, AggregateTree, Change, Database, SubTree, Tree, Update, ID, U32, U64,
+use tokactordb::{
+    Aggregate, AggregateTree, Change, Database, FileSystem, SubTree, Tree, Update, ID, U32, U64,
 };
 use tracing::Level;
 
@@ -306,8 +306,10 @@ async fn tickets<'a>(
 
 async fn run() -> anyhow::Result<()> {
     let mut cli = Cli::new();
+    // Create a filesystem for the database to use
+    let filesystem = FileSystem::system("/");
     // Create a new database. Set it up by registering all the tables
-    let mut db = Database::new();
+    let db = Database::new(filesystem).await?;
 
     // Add the board table
     let board_store = db
@@ -337,7 +339,7 @@ async fn run() -> anyhow::Result<()> {
         .await?;
 
     // Now with all of the database tables declared, we want to restore the database
-    db.restore(".db").await?;
+    db.restore().await?;
 
     println!("\nTask Cli Database!\n");
 

@@ -1,4 +1,4 @@
-# Conventually
+# tokactordb
 
 A database where you declare all of the relationships through code. You program
 the business logic and we handle the storage. By understanding how you may use
@@ -21,3 +21,10 @@ The goals for this database are the following:
 2. (Aggregate) Declare quires that you want to execute during execution
 3. (Index) Declare indexes that you want to be able to keep in sorted order
 4. (Select) Declare sub lists that you want to be able to query
+5. (Constraints) Declare what should be consider valid data before insertion into database
+
+## Goal of database
+
+On-disk key-value database that is defined using code. The database will have
+all tables, quires, and indexes defined inside of the project. These changes will
+be tracked inside of the databases metadata before recovery.
