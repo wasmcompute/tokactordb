@@ -110,3 +110,26 @@ impl InMemoryFs {
         }
     }
 }
+
+impl From<()> for InMemoryFs {
+    fn from(_: ()) -> Self {
+        let map = HashMap::new();
+        Self { file_system: map }
+    }
+}
+
+impl<K, V> From<&[(K, V)]> for InMemoryFs
+where
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    fn from(values: &[(K, V)]) -> Self {
+        let mut map = HashMap::new();
+        for (key, value) in values {
+            let k = PathBuf::from(key.as_ref());
+            let v = FNode::from(value);
+            map.insert(k, Ident::File(v));
+        }
+        Self { file_system: map }
+    }
+}

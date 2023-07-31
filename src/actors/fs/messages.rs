@@ -59,4 +59,9 @@ impl OpenFileOptions {
         self.append = true;
         self
     }
+
+    pub fn path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.path = path.into();
+        self
+    }
 }

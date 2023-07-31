@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{io::Read, path::PathBuf};
 
 use tokactor::ActorRef;
 
@@ -9,6 +9,7 @@ use super::{
     DbFile,
 };
 
+#[derive(Clone)]
 pub struct FileSystemFacade {
     rebase: Option<PathBuf>,
     inner: ActorRef<FileSystem>,
@@ -52,6 +53,13 @@ impl FileSystemFacade {
             rebase: Some(rebase),
             inner: self.inner.clone(),
         }
+    }
+
+    pub(crate) async fn read_full_file(&self, path: impl Into<PathBuf>) -> anyhow::Result<String> {
+        let mut str = String::new();
+        let mut file = self.read_file(path).await?;
+        file.read_to_string(&mut str)?;
+        Ok(str)
     }
 
     fn do_rebase(base: Option<&PathBuf>, path: PathBuf) -> PathBuf {

@@ -34,10 +34,10 @@ pub struct FileSystem {
 impl Actor for FileSystem {}
 
 impl FileSystem {
-    pub fn in_memory() -> Self {
+    pub fn in_memory(input: impl Into<InMemoryFs>) -> Self {
         Self {
             base_path: PathBuf::from("/"),
-            filesystem: FileSystemImpl::Memory(InMemoryFs::default()),
+            filesystem: FileSystemImpl::Memory(input.into()),
         }
     }
 
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn succeed_open_base_dir_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         succeed_open_base_dir(mem);
     }
 
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn fail_open_file_with_no_write_and_truncate_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         fail_open_file_with_invalid_permissions(mem);
     }
 
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn fail_to_open_cause_create_not_set_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         fail_to_open_cause_create_not_set(mem);
     }
 
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn fail_open_file_with_create_new_because_exists_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         fail_open_file_with_create_new_because_exists(mem);
     }
 
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn fail_open_file_because_it_is_directory_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         fail_open_file_because_it_is_directory(mem);
     }
 
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn fail_to_open_file_because_no_parent_file_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         fail_to_open_file_because_no_parent_file(mem);
     }
 
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn fail_to_open_parent_file_not_dir_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         fail_to_open_parent_file_not_dir(mem);
     }
 
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn succeed_open_file_with_no_read_or_write_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         succeed_open_file_with_no_read_or_write(mem);
     }
 
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn succeed_open_file_with_truncate_option_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         succeed_open_file_with_truncate_option(mem);
     }
 
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn succeed_open_with_append_option_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         succeed_open_with_append_option(mem);
     }
 
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn succeed_in_writing_more_then_max_buffer_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         succeed_in_writing_more_then_max_buffer(mem);
     }
 
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn succeed_create_dir_if_not_exist_in_memory() {
-        let mem = FileSystem::in_memory();
+        let mem = FileSystem::in_memory(());
         succeed_create_dir_if_not_exist(mem);
     }
 

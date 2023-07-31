@@ -27,6 +27,14 @@ impl FNode {
     }
 }
 
+impl<S: AsRef<str>> From<S> for FNode {
+    fn from(value: S) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(Disk::from(value))),
+        }
+    }
+}
+
 impl Default for FNode {
     fn default() -> Self {
         Self::new()
@@ -82,6 +90,16 @@ impl Disk {
 impl Default for Disk {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<S: AsRef<str>> From<S> for Disk {
+    fn from(value: S) -> Self {
+        Self {
+            buffer_pointer: 0,
+            buffer: [0_u8; MAX_BUFFER_SIZE],
+            contents: value.as_ref().as_bytes().to_vec(),
+        }
     }
 }
 

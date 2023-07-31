@@ -17,12 +17,13 @@ fn validate_manifest_file_name(name: &str) -> anyhow::Result<u64> {
     }
 }
 
-pub struct ManifestLog {
+pub struct ManifestFileMap {
     current: Option<String>,
     logs: Vec<Current>,
+    file: DbFile,
 }
 
-impl ManifestLog {
+impl ManifestFileMap {
     /// Recover the manifest file.
     ///
     /// - Validate that it contains log files and a current file.
@@ -37,7 +38,7 @@ impl ManifestLog {
     ) -> anyhow::Result<Self> {
         let mut contents = String::new();
         let mut file = fs
-            .open(OpenFileOptions::new(manifest).read().create())
+            .open(OpenFileOptions::new(manifest).read().write().create())
             .await?;
         file.read_to_string(&mut contents)?;
 
@@ -58,7 +59,7 @@ impl ManifestLog {
         }
 
         files.sort();
-        let mut i = 1;
+        let mut i = 0;
         for file in &files {
             if file.sequence_num == i {
                 i += 1;
@@ -74,6 +75,7 @@ impl ManifestLog {
         Ok(Self {
             current: current_opt,
             logs: files,
+            file,
         })
     }
 
@@ -121,30 +123,40 @@ impl ManifestLog {
         }
     }
 
-    /// Create the first MANIFEST log file. Fails if it already exists. Return
-    /// a reference to the newly pointer.
-    pub async fn create_first_event_log_file(
+    /// Create the manifest file system. If files already exist, then validate they
+    /// have no content inside of them. Otherwise, create the files needed to
+    /// operate the system so we can guarntee they exist after this point.
+    pub async fn create_manifest_system(
         &mut self,
         fs: &FileSystemFacade,
-    ) -> anyhow::Result<&Current> {
-        let pointer = "MANIFEST-1".to_string();
-        fs.open(OpenFileOptions::new(&pointer).create_new()).await?;
-        let current = Current::new(pointer, 1);
-        self.logs.push(current);
-        Ok(self.logs.first().unwrap())
+    ) -> anyhow::Result<Current> {
+        let opts = OpenFileOptions::new("CURRENT").create_new().write();
+
+        let mut current_file = fs.open(opts.clone()).await?;
+        let _ = fs.open(opts.path("MANIFEST-0")).await?;
+        self.file.write_all(b"CURRENT\nMANIFEST-0")?;
+        self.file.flush()?;
+        current_file.write_all(b"MANIFEST-0")?;
+        current_file.flush()?;
+
+        let current = Current::new("MANIFEST-0", 0);
+        self.current = Some(current.pointer.clone());
+        self.logs.push(current.clone());
+
+        Ok(current)
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Current {
     pointer: String,
     sequence_num: u64,
 }
 
 impl Current {
-    pub fn new(pointer: String, sequence_num: u64) -> Self {
+    pub fn new(pointer: impl ToString, sequence_num: u64) -> Self {
         Self {
-            pointer,
+            pointer: pointer.to_string(),
             sequence_num,
         }
     }
@@ -158,21 +170,6 @@ impl Current {
         let sequence_num = validate_manifest_file_name(&contents)?;
 
         Ok(Self::new(contents, sequence_num))
-    }
-
-    pub async fn create(
-        fs: &FileSystemFacade,
-        log: &Current,
-        path: impl Into<PathBuf>,
-    ) -> anyhow::Result<Self> {
-        let mut file = fs
-            .open(OpenFileOptions::new(path).create_new().write())
-            .await?;
-        file.write_all(log.pointer.as_bytes())?;
-        Ok(Self {
-            pointer: log.pointer.clone(),
-            sequence_num: log.sequence_num,
-        })
     }
 }
 
@@ -204,15 +201,13 @@ pub struct Manifest {
 
 impl Manifest {
     pub async fn recover(fs: FileSystemFacade) -> anyhow::Result<Self> {
-        // TODO: Rebase filesystem with the provided `base`. No more joining!
-        let mut manifest = ManifestLog::recover(&fs, "MANIFEST", "CURRENT").await?;
+        let mut manifest = ManifestFileMap::recover(&fs, "MANIFEST", "CURRENT").await?;
         let current = if let Some(name) = &manifest.current {
             Current::recover(&fs, name).await?
         } else {
             // Current doesn't exist
             manifest.no_log_events_exist(&fs).await?;
-            let current = manifest.create_first_event_log_file(&fs).await?;
-            Current::create(&fs, current, "CURRENT").await?
+            manifest.create_manifest_system(&fs).await?
         };
 
         manifest.points_at_latest(&current)?;
@@ -226,5 +221,188 @@ impl Manifest {
         //       validate that all events are in correct order
 
         Ok(Self { log })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokactor::Actor;
+
+    use crate::{
+        actors::{
+            fs::{FileSystemFacade, OpenFileOptions},
+            manifest::{Current, Manifest, ManifestFileMap},
+        },
+        FileSystem,
+    };
+
+    use super::validate_manifest_file_name;
+
+    const M: &str = "MANIFEST";
+    const C: &str = "CURRENT";
+
+    #[test]
+    fn invalid_manifest_file_names() {
+        assert!(validate_manifest_file_name("name").is_err());
+        assert!(validate_manifest_file_name("MANIFEST-name").is_err());
+        assert!(validate_manifest_file_name("MANIFEST-123abc").is_err());
+        assert!(validate_manifest_file_name("MANIFEST-1!").is_err());
+        assert!(validate_manifest_file_name("MANIFEST-1\n").is_err());
+        assert!(validate_manifest_file_name("MANIFEST-1\t").is_err());
+        assert!(validate_manifest_file_name("\tMANIFEST-1").is_err());
+        assert!(validate_manifest_file_name("MANIFEST--1").is_err());
+        assert!(
+            validate_manifest_file_name(&format!("MANIFEST-{}", u64::MAX as u128 + 1)).is_err()
+        );
+    }
+
+    #[test]
+    fn valid_manifest_file_names() {
+        assert_eq!(validate_manifest_file_name("MANIFEST-123").unwrap(), 123);
+        assert_eq!(validate_manifest_file_name("MANIFEST-1").unwrap(), 1);
+        assert_eq!(
+            validate_manifest_file_name(&format!("MANIFEST-{}", u64::MIN)).unwrap(),
+            u64::MIN
+        );
+        assert_eq!(
+            validate_manifest_file_name(&format!("MANIFEST-{}", u64::MAX)).unwrap(),
+            u64::MAX
+        );
+    }
+
+    async fn init_fs(map: &[(impl AsRef<str>, impl AsRef<str>)]) -> FileSystemFacade {
+        let in_memory = FileSystem::in_memory(map);
+        let in_memory_actor = in_memory.start();
+        let fs = FileSystemFacade::new(in_memory_actor);
+        fs.open_base_dir().await.unwrap();
+        fs
+    }
+
+    /***************************************************************************
+     * Testing Current::recover
+     **************************************************************************/
+
+    #[tokio::test]
+    async fn recover_current_file() {
+        let fs = init_fs(&[("/CURRENT", "MANIFEST-0")]).await;
+        let current = Current::recover(&fs, C).await.unwrap();
+        assert_eq!(current, Current::new("MANIFEST-0", 0));
+    }
+
+    #[tokio::test]
+    async fn fail_recovery_of_current_file() {
+        let fs = init_fs(&[("/CURRENT", "MANIFEST-NO")]).await;
+        assert!(Current::recover(&fs, C).await.is_err());
+    }
+
+    /***************************************************************************
+     * Testing ManifestFileMap::recover
+     **************************************************************************/
+
+    #[tokio::test]
+    async fn recover_empty_manifest_file_map() {
+        let fs = init_fs(&[] as &[(&str, &str)]).await;
+        let map = ManifestFileMap::recover(&fs, M, C).await.unwrap();
+        assert_eq!(map.logs, Vec::new());
+        assert_eq!(map.current, None);
+        assert!(fs.read_file(M).await.is_ok()); // manifest file created
+        assert!(fs.read_file(C).await.is_err()); // current file not created
+    }
+
+    #[tokio::test]
+    async fn fail_to_recover_manifest_file_map_because_2_current_referenced() {
+        let map = [("/MANIFEST", "CURRENT\nCURRENT")];
+        let fs = init_fs(&map).await;
+        assert!(ManifestFileMap::recover(&fs, M, C).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fail_to_recover_manifest_file_map_because_incorrect_file_name_found() {
+        let map = [("/MANIFEST", "MANIFEST-NOT")];
+        let fs = init_fs(&map).await;
+        assert!(ManifestFileMap::recover(&fs, M, C).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fail_to_recover_manifest_file_map_because_missing_sequence_logs() {
+        let map = [("/MANIFEST", "MANIFEST-0\nMANIFEST-1\nMANIFEST-10")];
+        let fs = init_fs(&map).await;
+        assert!(ManifestFileMap::recover(&fs, M, C).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn recover_partial_manifest_file_map() {
+        let map = [("/MANIFEST", "CURRENT")];
+        let fs = init_fs(&map).await;
+
+        let map = ManifestFileMap::recover(&fs, M, C).await.unwrap();
+        assert_eq!(map.logs, Vec::new());
+        assert_eq!(map.current, Some("CURRENT".to_string()));
+        assert!(fs.read_file(M).await.is_ok()); // manifest file created
+        assert!(fs.read_file(C).await.is_err()); // current file not created
+    }
+
+    #[tokio::test]
+    async fn recover_partial_manifest_file_map_and_current() {
+        let map = [("/MANIFEST", "CURRENT"), ("/CURRENT", "")];
+        let fs = init_fs(&map).await;
+
+        let map = ManifestFileMap::recover(&fs, M, C).await.unwrap();
+        assert_eq!(map.logs, Vec::new());
+        assert_eq!(map.current, Some("CURRENT".to_string()));
+        assert!(fs.read_file(M).await.is_ok()); // manifest file created
+        assert!(fs.read_file(C).await.is_ok()); // current file created
+    }
+
+    #[tokio::test]
+    async fn recover_manifest_file_map() {
+        let map = [
+            ("/MANIFEST", "CURRENT\nMANIFEST-0\nMANIFEST-1"),
+            ("/CURRENT", "MANIFEST-1"),
+            ("/MANIFEST-0", ""),
+            ("/MANIFEST-1", ""),
+        ];
+        let fs = init_fs(&map).await;
+
+        let map = ManifestFileMap::recover(&fs, M, C).await.unwrap();
+        assert_eq!(
+            map.logs,
+            vec![Current::new("MANIFEST-0", 0), Current::new("MANIFEST-1", 1),]
+        );
+        assert_eq!(map.current, Some("CURRENT".to_string()));
+        assert!(fs.read_file(M).await.is_ok()); // manifest file created
+        assert!(fs.read_file(C).await.is_ok()); // current file created
+    }
+
+    /***************************************************************************
+     * Testing ManifestFileMap::recover
+     **************************************************************************/
+
+    #[tokio::test]
+    async fn recover_new_manifest_system() {
+        let fs = init_fs(&[] as &[(&str, &str)]).await;
+        let _ = Manifest::recover(fs.clone()).await.unwrap();
+
+        assert_eq!(fs.read_full_file(M).await.unwrap(), "CURRENT\nMANIFEST-0");
+        assert_eq!(fs.read_full_file(C).await.unwrap(), "MANIFEST-0");
+        assert_eq!(fs.read_full_file("MANIFEST-0").await.unwrap(), "");
+        assert!(fs.read_full_file("MANIFEST-1").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn recover_manifest_system() {
+        let map = [
+            ("/MANIFEST", "CURRENT\nMANIFEST-0\nMANIFEST-1"),
+            ("/CURRENT", "MANIFEST-1"),
+            ("/MANIFEST-0", ""),
+            ("/MANIFEST-1", ""),
+        ];
+        let fs = init_fs(&map).await;
+        let _ = Manifest::recover(fs.clone()).await.unwrap();
+
+        assert_eq!(fs.read_full_file(M).await.unwrap(), map[0].1);
+        assert_eq!(fs.read_full_file(C).await.unwrap(), map[1].1);
+        assert_eq!(fs.read_full_file("MANIFEST-0").await.unwrap(), map[2].1);
+        assert_eq!(fs.read_full_file("MANIFEST-1").await.unwrap(), map[3].1);
     }
 }
